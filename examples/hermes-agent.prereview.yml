@@ -1,0 +1,33 @@
+# Suggested .github/prereview.yml for NousResearch/hermes-agent, based on its repo setup:
+#  - CI already posts a live "CI review comment" with job results, so prbot links
+#    failing jobs without repeating their logs.
+#  - The PR template says tests are "required for bug fixes", so fix(...) PRs without
+#    test changes are blocking; other PRs get a non-blocking suggestion.
+#  - CI's blocking lint is `ruff check .` with ruff pinned in pyproject
+#    ([dependency-groups].dev). prbot detects both on its own; ruff format is configured
+#    in ruff.toml but not enforced, so prbot does not check it.
+#  - plugin-catalog/ PRs are one YAML file each and have their own CI.
+
+checks:
+  ci:
+    show_logs: false
+  tests:
+    blocking_title_patterns: ["^fix(\\(|:)"]
+    required_paths: ["**/*.py"]
+  size:
+    max_lines: 1000
+  overlap:
+    hub_file_prs: 4
+
+ignore_paths:
+  - "**/*.lock"
+  - "pnpm-lock.yaml"
+  - "uv.lock"
+  - "locales/**"
+  - "website/**"
+
+llm:
+  provider: hermes
+  small_model: NousResearch/Hermes-4-14B
+  review_model: NousResearch/Hermes-4-70B
+  max_reviews_per_run: 30
