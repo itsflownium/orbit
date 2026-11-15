@@ -54,6 +54,11 @@ def added_lines(patch: str | None) -> dict[int, str]:
     return {n: text.rstrip("\r") for kind, n, text in _walk(patch) if kind == "+"}
 
 
+def head_lines(patch: str | None) -> dict[int, str]:
+    """Lines shown on the PR head, including unchanged diff context."""
+    return {n: text.rstrip("\r") for kind, n, text in _walk(patch) if kind != "-"}
+
+
 def commentable_lines(patch: str | None) -> set[int]:
     """Right-side line numbers GitHub accepts for review comments (added + context)."""
     return {n for kind, n, _ in _walk(patch) if kind != "-"}

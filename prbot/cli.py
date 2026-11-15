@@ -58,6 +58,9 @@ def _local_analyzer(gh: GitHub, workspace: str | None, enabled: bool):
             return None
         try:
             return analyzer.analyze(pr, cfg, workspace)
+        except analyzer.AnalysisFailed as e:
+            log.warning("%s", e)
+            return None
         except analyzer.WorkspaceDirty as e:
             log.error("%s", e)
             raise SystemExit(2) from None
@@ -70,7 +73,7 @@ def cmd_review(args, gh: GitHub) -> int:
                     include_drafts=args.force, force_fix=args.fix,
                     analyze_fn=_local_analyzer(gh, args.workspace, not args.no_lint))
     _print_result(res, verbose=args.dry_run or args.verbose)
-    return 0
+    return 1 if res.get("error") else 0
 
 
 def cmd_sweep(args, gh: GitHub) -> int:
@@ -90,7 +93,7 @@ def cmd_prepare(args, gh: GitHub) -> int:
     with open(args.out, "w", encoding="utf-8", errors="surrogateescape") as fh:
         json.dump(data, fh)
     print(f"wrote {args.out} (fetched: {data['fetched']})")
-    return 0
+    return 0 if data["fetched"] else 2
 
 
 def cmd_analyze(args, gh) -> int:
@@ -99,10 +102,14 @@ def cmd_analyze(args, gh) -> int:
         if os.environ.get(var):
             log.error("%s is set; run `prbot analyze` in a step without secrets", var)
             return 2
-    pr, cfg = analyzer.load_prepared(analyzer.read_analysis_file(args.pr_json))
+    data = analyzer.read_analysis_file(args.pr_json)
+    if data.get("fetched") is False:
+        log.error("Could not fetch the base and head commits for analysis.")
+        return 2
+    pr, cfg = analyzer.load_prepared(data)
     try:
         result = analyzer.analyze(pr, cfg, args.workspace or ".")
-    except analyzer.WorkspaceDirty as e:
+    except (analyzer.WorkspaceDirty, analyzer.AnalysisFailed) as e:
         log.error("%s", e)
         return 2
     with open(args.out, "w", encoding="utf-8", errors="surrogateescape") as fh:
@@ -116,11 +123,15 @@ def _event_prs(gh: GitHub, repo: str, run: dict) -> list[int]:
     numbers = [p["number"] for p in run.get("pull_requests") or []
                if ((p.get("base") or {}).get("repo") or {}).get("name") == repo.split("/")[-1]
                and ((p.get("base") or {}).get("repo") or {}).get("url", "").endswith(f"/repos/{repo}")]
-    if not numbers and run.get("head_sha"):
-        # fork PRs are not listed in workflow_run.pull_requests
-        for item in gh.list_open_prs(repo, limit=300):
-            if (item.get("head") or {}).get("sha") == run["head_sha"]:
-                numbers.append(item["number"])
+    if not numbers and run.get("head_sha") and run.get("head_branch"):
+        head_repo = (run.get("head_repository") or {}).get("full_name")
+        if head_repo and "/" in head_repo:
+            head_ref = run["head_branch"]
+            for item in gh.list_open_prs(repo, head=f"{head_repo.split('/', 1)[0]}:{head_ref}"):
+                head = item.get("head") or {}
+                if head.get("sha") == run["head_sha"] and head.get("ref") == head_ref \
+                        and ((head.get("repo") or {}).get("full_name") or "").lower() == head_repo.lower():
+                    numbers.append(item["number"])
     return numbers
 
 
@@ -133,6 +144,7 @@ def cmd_event(args, gh: GitHub) -> int:
         with open(path, encoding="utf-8") as fh:
             event = json.load(fh)
     ws = args.workspace
+    verbose = args.verbose or args.dry_run
 
     if name in ("pull_request", "pull_request_target"):
         action = event.get("action")
@@ -143,27 +155,28 @@ def cmd_event(args, gh: GitHub) -> int:
         if action == "edited" and not ({"body", "title", "base"} & set(changes)):
             return 0
         res = review_pr(gh, repo, event["pull_request"]["number"], workspace=ws, force=action == "edited")
-        _print_result(res, args.verbose)
+        _print_result(res, verbose)
     elif name == "issue_comment":
         res = handle_comment(gh, event, workspace=ws)
         print(json.dumps({k: v for k, v in res.items() if k not in ("body", "findings")}, default=str))
     elif name == "workflow_run":
         # CI or the analysis job finished: results changed on the same commit, so always re-review
         for n in _event_prs(gh, repo, event.get("workflow_run") or {}):
-            _print_result(review_pr(gh, repo, n, workspace=ws, force=True), args.verbose)
+            _print_result(review_pr(gh, repo, n, workspace=ws, force=True), verbose)
     elif name in ("schedule", "workflow_dispatch"):
         inputs = event.get("inputs") or {}
         if inputs.get("pr"):
             _print_result(review_pr(gh, repo, int(inputs["pr"]), workspace=ws, force=True, include_drafts=True),
-                          args.verbose)
+                          verbose)
         else:
             limit = int(inputs.get("limit") or os.environ.get("PRBOT_SWEEP_LIMIT") or 0) or None
-            results = sweep(gh, repo, limit=limit, workspace=ws, on_result=lambda r: _print_result(r, args.verbose))
+            results = sweep(gh, repo, limit=limit, workspace=ws, on_result=lambda r: _print_result(r, verbose))
             report = render_report(repo, results)
             summary = os.environ.get("GITHUB_STEP_SUMMARY")
             if summary:
                 with open(summary, "a", encoding="utf-8") as fh:
                     fh.write(report + "\n")
+            return 1 if any(r.get("error") for r in results) else 0
     else:
         print(f"prbot: nothing to do for event {name!r}")
     return 0

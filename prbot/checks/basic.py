@@ -6,7 +6,7 @@ import re
 from collections import Counter
 
 from ..diffutil import added_lines, glob_match, top_dir
-from ..models import ADVISORY, Finding
+from ..models import ADVISORY, BLOCKING, Finding
 from . import Context, check
 
 FAILED = {"failure", "timed_out", "startup_failure"}
@@ -85,8 +85,9 @@ def ci(ctx: Context) -> list[Finding]:
     for name in action:
         findings.append(Finding(check="ci", severity=ADVISORY, key=f"ci-action-{_slug(name)}",
                                 title=f"`{name}` is waiting for maintainer approval to run"))
+    if (pending or action) and ctx.severity("ci") == BLOCKING:
+        ctx.pending_checks.add("ci")
     if pending:
-        ctx.shared.setdefault("ci_pending", {})[pr.number] = True
         ctx.notes.append(f"CI still running ({', '.join(sorted(set(pending))[:5])}); the bot re-checks when it finishes.")
     return findings
 

@@ -32,6 +32,9 @@ inputs:
   llm-api-key:
     description: Review mode only. API key for the LLM endpoint, if it needs one.
     default: ""
+  anthropic-api-key:
+    description: Review mode only. API key for the optional Anthropic backend.
+    default: ""
   pr-number:
     description: Analyze mode only. PR number (defaults to the triggering pull_request).
     default: ${{ github.event.pull_request.number }}
@@ -58,9 +61,12 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         MODE: ${{ inputs.mode }}
         TOOLS: ${{ inputs.tools }}
+        INSTALL_ANTHROPIC: ${{ inputs.anthropic-api-key != '' || env.ANTHROPIC_API_KEY != '' }}
         WORKSPACE: ${{ inputs.workspace }}
       run: |
-        python -m pip install --quiet "$ACTION_PATH"
+        package="$ACTION_PATH"
+        if [ "$MODE" != "analyze" ] && [ "$INSTALL_ANTHROPIC" = "true" ]; then package="$package[anthropic]"; fi
+        python -I -m pip install --quiet "$package"
         if [ "$MODE" = "analyze" ]; then
           if [ -n "$TOOLS" ]; then
             read -r -a extra <<< "$TOOLS"
@@ -112,11 +118,14 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         PRBOT_PUSH_TOKEN: ${{ inputs.push-token }}
         PRBOT_LOGIN: ${{ inputs.bot-login }}
-        PRBOT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
-        PRBOT_LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_BASE_URL_INPUT: ${{ inputs.llm-base-url }}
+        LLM_API_KEY_INPUT: ${{ inputs.llm-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key || env.ANTHROPIC_API_KEY }}
         WORKSPACE: ${{ inputs.workspace }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
+        if [ -n "$LLM_BASE_URL_INPUT" ]; then export PRBOT_LLM_BASE_URL="$LLM_BASE_URL_INPUT"; fi
+        if [ -n "$LLM_API_KEY_INPUT" ]; then export PRBOT_LLM_API_KEY="$LLM_API_KEY_INPUT"; fi
         flags=()
         if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
         prbot "${flags[@]}" --workspace "$WORKSPACE" event
