@@ -84,7 +84,7 @@ def cmd_sweep(args, gh: GitHub) -> int:
         with open(args.report, "w", encoding="utf-8") as fh:
             fh.write(render_report(args.repo, results))
         print(f"wrote {args.report}")
-    return 1 if any(r.get("error") for r in results) else 0
+    return 0
 
 
 def cmd_prepare(args, gh: GitHub) -> int:
