@@ -1,6 +1,6 @@
-# Working on prbot
+# Working on Orbit
 
-prbot pre-reviews GitHub pull requests. It runs cheap checks, then either comments the problems so
+Orbit pre-reviews GitHub pull requests. It runs cheap checks, then either comments the problems so
 the author can fix them or fixes them itself, and only marks a PR ready for maintainers once nothing
 blocks it. Read [README.md](README.md) for what it does and how it is installed. Open work is listed
 in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
