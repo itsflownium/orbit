@@ -1,0 +1,28 @@
+name: prereview-analyze
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  analyze:
+    if: github.event.action != 'edited' || github.event.changes.base
+    concurrency:
+      group: prereview-analyze-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: ./
+        with:
+          mode: analyze
+          tools: uv ruff

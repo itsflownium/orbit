@@ -24,6 +24,8 @@ It is built to be cheap. Most checks call no model at all. The model review runs
    - A small model triages the PR: change type, risk, and whether the description matches the diff.
    - A deeper review checks code for actionable defects. Findings point to added lines and explain
      the condition that causes the problem, the impact, and how to fix and verify it.
+   - Findings can link to related code on the reviewed commit. The bot reads nearby source and any
+     exact paths listed in `checks.llm_review.context_paths`, then verifies each linked line.
 5. **One summary comment, edited in place**, plus inline comments, labels and a `pre-review` commit status.
    It re-checks on every push, and fixed items are ticked off.
 
@@ -124,6 +126,11 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 4. If the bot posts with a GitHub App token, set the action's `bot-login` input to the app's login
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
+
+On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
+from the runner's environment. Explicit action inputs take precedence. This repository's installed
+workflow uses `PRBOT_REVIEW_RUNNER` as an optional repository variable for a runner serving Hermes
+locally when analysis completes.
 
 If you don't run the analysis workflow, set `analysis: {required: false}` in `.github/prereview.yml`.
 Otherwise PRs stay "waiting for lint results".

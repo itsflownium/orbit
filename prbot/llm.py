@@ -20,12 +20,14 @@ import math
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
-from .diffutil import added_lines
-from .github import SSL_CONTEXT
+from .diffutil import added_lines, glob_match, head_lines, patch_lines
+from .github import SSL_CONTEXT, GitHubError
 from .models import Finding
+from .workspace import server_url
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +59,19 @@ REVIEW_SCHEMA: dict[str, Any] = {
                     "explanation": {"type": "string"},
                     "recommendation": {"type": "string"},
                     "replacement": {"type": "string"},
+                    "references": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"},
+                                           "end_line": {"type": "integer"}},
+                            "required": ["path", "start_line", "end_line"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
                 "required": ["path", "line", "kind", "confidence", "title", "explanation",
-                             "recommendation", "replacement"],
+                             "recommendation", "replacement", "references"],
                 "additionalProperties": False,
             },
         },
@@ -85,6 +97,9 @@ Each finding must reference a line that appears with a leading '+' in the diff. 
 added lines from the new-file number in the hunk header to get the exact line. Give a specific title. \
 In `explanation`, describe the input or situation that triggers the bug and what the caller sees. \
 In `recommendation`, explain the concrete code change and how to check the result. Keep both concise. \
+Use `references` to point to the relevant callers, definitions, or nearby code that the change may \
+break. Cite exact paths and line ranges from the diff or numbered code context. Use an empty list \
+when no other source lines support the finding. \
 `confidence` is 0-1: how sure you are a maintainer would agree. \
 If a one-line fix is obvious, put the full corrected text of that single line in `replacement` \
 (preserving indentation); otherwise use an empty string.
@@ -377,7 +392,61 @@ def triage(provider: Provider, cfg: dict, pr, files) -> dict | None:
     }
 
 
-def deep_review(provider: Provider, cfg: dict, pr, files, guidelines: str | None) -> tuple[list[Finding], str | None]:
+_MAX_CONTEXT_FILES = 6
+_MAX_CONTEXT_CHARS = 12000
+_MAX_FILE_CONTEXT_CHARS = 4000
+
+
+def _review_context(gh, cfg: dict, pr, files) -> tuple[str, dict[str, dict[int, str]]]:
+    visible = {f.filename: head_lines(f.patch) for f in files}
+    if gh is None:
+        return "", visible
+    amended = {f.filename: added_lines(f.patch) for f in files if f.patch and f.status != "removed"}
+    configured = cfg["checks"]["llm_review"].get("context_paths") or []
+    if not isinstance(configured, list):
+        configured = []
+    source_exts = tuple(cfg["checks"].get("tests", {}).get("code_extensions") or ())
+    changed_sources = [p for p in amended if p.endswith(source_exts)]
+    paths = dict.fromkeys(p for p in [*configured, *changed_sources] if isinstance(p, str)
+                         and not {".", "..", ""}.intersection(p.split("/"))
+                         and not glob_match(p, cfg.get("ignore_paths", [])))
+    blocks = []
+    remaining = _MAX_CONTEXT_CHARS
+    for path in list(paths)[:_MAX_CONTEXT_FILES]:
+        if remaining <= 0:
+            break
+        try:
+            source = gh.get_file_text(pr.repo, path, pr.head_sha)
+        except (GitHubError, OSError) as exc:
+            log.info("Could not read optional review context for %s: %s", path, type(exc).__name__)
+            continue
+        if not source or "\0" in source:
+            continue
+        lines = patch_lines(source)
+        nearby = sorted({n for line in amended.get(path, {})
+                         for n in range(max(1, line - 12), min(len(lines), line + 12) + 1)})
+        indices = nearby or range(1, len(lines) + 1)
+        heading = f"File {json.dumps(path, ensure_ascii=False)}"
+        allowance = min(remaining, _MAX_FILE_CONTEXT_CHARS) - len(heading) - 3
+        selected: dict[int, str] = {}
+        for n in indices:
+            content = lines[n - 1].rstrip("\r")
+            size = len(str(n)) + len(content) + 4
+            if size <= allowance:
+                selected[n] = content
+                allowance -= size
+            if allowance <= 0:
+                break
+        if selected:
+            block = heading + "\n" + "\n".join(f"{n} | {line}" for n, line in selected.items())
+            blocks.append(block)
+            remaining -= len(block) + 2
+            visible.setdefault(path, {}).update(selected)
+    return "\n\n".join(blocks), visible
+
+
+def deep_review(provider: Provider, cfg: dict, pr, files, guidelines: str | None, *, gh=None
+                ) -> tuple[list[Finding], str | None]:
     """Returns (findings, skip_reason)."""
     rc = cfg["checks"]["llm_review"]
     keep = {f.filename for f in files}
@@ -388,15 +457,47 @@ def deep_review(provider: Provider, cfg: dict, pr, files, guidelines: str | None
         return [], f"diff is {len(diff):,} characters, above the {rc['max_diff_chars']:,} limit for automated review"
     guide = f"<repo_guidelines>\n{guidelines[:8000]}\n</repo_guidelines>\n\n" if guidelines else ""
     user = f"{guide}{_pr_header(pr)}\n\n<diff>\n{diff}\n</diff>"
+    context, visible = _review_context(gh, cfg, pr, files)
+    if context:
+        user += f"\n\n<code_context>\n{context}\n</code_context>"
     data = provider.complete_json(model_for(cfg, "review_model"), REVIEW_SYSTEM, user, REVIEW_SCHEMA,
                                   max_tokens=8000)
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
         return [], "model did not return a usable review"
-    return validate_review(data, pr, files, rc), None
+    return validate_review(data, pr, files, rc, visible), None
 
 
-def validate_review(data: dict, pr, files, rc: dict) -> list[Finding]:
-    by_path = {f.filename: f for f in files}
+def _reference_links(items: Any, pr, visible: dict[str, dict[int, str]], anchor: tuple[str, int]) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    root = f"{server_url()}/{pr.repo}/blob/{pr.head_sha}/"
+    links = []
+    for reference in items:
+        if not isinstance(reference, dict):
+            continue
+        path, start, end = (reference.get(key) for key in ("path", "start_line", "end_line"))
+        if not isinstance(path, str) or type(start) is not int or type(end) is not int or not 1 <= start <= end < start + 20:
+            continue
+        if (path, start) == anchor and end == start:
+            continue
+        if not all(n in visible.get(path, {}) for n in range(start, end + 1)):
+            continue
+        escaped = re.sub(r"([\\\[\]`])", r"\\\1", path)
+        line_label = f"{start}" if end == start else f"{start}–{end}"
+        fragment = f"L{start}" if end == start else f"L{start}-L{end}"
+        url = urllib.parse.quote(path, safe="/")
+        link = f"[{escaped}:{line_label}]({root}{url}#{fragment})"
+        if link not in links:
+            links.append(link)
+            if len(links) == 3:
+                break
+    return links
+
+
+def validate_review(data: dict, pr, files, rc: dict, visible: dict[str, dict[int, str]] | None = None) -> list[Finding]:
+    added = {f.filename: added_lines(f.patch) for f in files}
+    if visible is None:
+        visible = {f.filename: head_lines(f.patch) for f in files}
     scored: list[tuple[float, Finding]] = []
     items = data.get("findings")
     for item in items if isinstance(items, list) else []:
@@ -411,8 +512,7 @@ def validate_review(data: dict, pr, files, rc: dict) -> list[Finding]:
             continue
         if not math.isfinite(confidence) or not rc["min_confidence"] <= confidence <= 1:
             continue
-        f = by_path.get(path)
-        code = added_lines(f.patch).get(line) if f is not None else None
+        code = added.get(path, {}).get(line)
         if code is None:
             continue
         replacement = item.get("replacement")
@@ -433,6 +533,7 @@ def validate_review(data: dict, pr, files, rc: dict) -> list[Finding]:
             title=f"{kind[:30]}: {title.strip()[:120]}", detail=explanation.strip()[:1500],
             suggestion=replacement.rstrip("\n") if replacement else None, key=key,
             recommendation=recommendation,
+            references=_reference_links(item.get("references"), pr, visible, (path, line)),
         )))
     scored.sort(key=lambda pair: -pair[0])
     return [f for _, f in scored[: rc["max_findings"]]]

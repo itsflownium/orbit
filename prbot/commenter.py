@@ -93,11 +93,12 @@ def _fence(text: str) -> str:
 
 
 def _details(f: Finding) -> str:
-    explanation = clean(f.detail)
-    if not f.recommendation:
-        return explanation
-    repair = "**How to fix**\n\n" + clean(f.recommendation)
-    return f"{explanation}\n\n{repair}" if explanation else repair
+    parts = [clean(f.detail)]
+    if f.references:
+        parts.append("**Related code**\n\n" + "\n".join(f"- {link}" for link in f.references))
+    if f.recommendation:
+        parts.append("**How to fix**\n\n" + clean(f.recommendation))
+    return "\n\n".join(part for part in parts if part)
 
 
 def inline_body(f: Finding, *, allow_suggestions: bool = True) -> str:

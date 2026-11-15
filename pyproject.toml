@@ -22,3 +22,6 @@ include = ["prbot*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "B"]

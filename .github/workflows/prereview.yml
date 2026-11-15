@@ -1,0 +1,37 @@
+name: prereview
+
+on:
+  workflow_run:
+    workflows: [prereview-analyze, test]
+    types: [completed]
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
+       github.event.workflow_run.path == '.github/workflows/test.yml')
+    concurrency:
+      group: prbot-review-writes
+      queue: max
+    # A local Hermes gateway can serve the analysis-triggered review. Test completion
+    # events continue to refresh GitHub status even when that runner is offline.
+    runs-on: ${{ (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./
+        with:
+          llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
+          llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}

@@ -264,7 +264,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
     rc = cfg.check("llm_review")
     state["llm_pending"] = False
     if rc.get("enabled") and "llm_review" not in ignored:
-        clean = override or not any(f.blocking for f in findings)
+        clean = override or not (lint_pending or ctx.pending_checks or any(f.blocking for f in findings))
         triage, model_findings, done = _model_review(ctx, clean, state, rc)
         state["llm_pending"] = not done
         model_findings = [f for f in model_findings if f.key not in resolved]
@@ -408,7 +408,7 @@ def _model_review(ctx: Context, clean: bool, state: dict, rc: dict) -> tuple[dic
             return None, [], False
         return None, [], True  # no model configured: nothing pending
     if rc.get("only_when_clean", True) and not clean:
-        ctx.notes.append("The model review runs after the blocking issues are fixed.")
+        ctx.notes.append("The model review runs after the blocking issues are fixed and required checks pass.")
         return None, [], True  # a new push or a resolved finding re-runs the review anyway
     budget = cfg["llm"].get("max_reviews_per_run", 20)
     if shared.get("llm_reviews", 0) >= budget:
@@ -432,7 +432,7 @@ def _model_review(ctx: Context, clean: bool, state: dict, rc: dict) -> tuple[dic
     if trivial:
         ctx.notes.append("Low-risk change; skipped the deep model review.")
     else:
-        review, skip_reason = llm.deep_review(provider, cfg, pr, ctx.files, _guidelines(ctx.gh, pr, shared))
+        review, skip_reason = llm.deep_review(provider, cfg, pr, ctx.files, _guidelines(ctx.gh, pr, shared), gh=ctx.gh)
         if skip_reason:
             ctx.notes.append(f"Deep model review skipped: {skip_reason}.")
         else:
