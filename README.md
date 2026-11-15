@@ -6,8 +6,17 @@ Orbit pre-reviews GitHub pull requests on any repository. It finds problems, the
 **fixes them** or **comments so the author can fix them**. A PR reaches the maintainer queue
 (`bot:ready-for-review`) only once nothing blocks it.
 
-It is built to be cheap. Most checks call no model at all. The model review runs on a self-hosted
-**Hermes** model, only on PRs that are already clean, and only up to a budget you set.
+To enable model reviews, set both `llm.provider` and `llm.review_model` in
+`.github/prereview.yml`. Use the exact model ID your provider exposes. For example:
+
+```yaml
+llm:
+  provider: hermes
+  review_model: deepseek/deepseek-v4.1-flash
+```
+
+For Hermes or another compatible chat completions endpoint, configure `PRBOT_LLM_BASE_URL`
+and add `PRBOT_LLM_API_KEY` if the endpoint requires one. Most Orbit checks run without a model.
 
 ## What it does on each PR
 
