@@ -9,18 +9,18 @@ name: prereview-analyze
 on:
   pull_request:
     branches: ['prbot-smoke-261115-base']
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
   pull-requests: read
 
-concurrency:
-  group: prereview-analyze-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   analyze:
+    if: github.event.action != 'edited' || github.event.changes.base
+    concurrency:
+      group: prereview-analyze-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     # GitHub-hosted runners only: PR code runs here, and a self-hosted runner would keep whatever it leaves behind.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -28,7 +28,7 @@ jobs:
       # Base branch: tool detection, enforcement and version pins are read from here.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 1
       - uses: ./
@@ -36,9 +36,22 @@ jobs:
           mode: analyze
           tools: 'uv ruff'
 
-      - name: Verify workflow token actor
-        if: always()
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python -c 'from prbot.github import GitHub; print("Workflow token login:", GitHub().login())'
+  review-dry-run:
+    if: github.event.pull_request.head.ref == 'prbot-smoke-261115/partition-records'
+    needs: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: ./
+        with:
+          dry-run: 'true'
