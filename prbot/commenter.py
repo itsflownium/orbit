@@ -74,6 +74,7 @@ def find_summary(gh, pr: PullRequest) -> tuple[int | None, dict]:
 
 
 _MENTION = re.compile(r"@(?=[A-Za-z0-9])")
+_GITHUB_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 _SUGGESTION_FENCE = re.compile(r"([`~]{3,}[ \t]*)suggestion\b", re.I)
 
 
@@ -116,7 +117,7 @@ def inline_body(f: Finding, *, allow_suggestions: bool = True) -> str:
         fence = _fence(example)
         parts.append(f"**Example replacement**\n\n{fence}\n{example}\n{fence}")
     if f.check != "autofix":
-        parts.append("<sub>prbot · reply `/bot dispute " + _key(f.key) + " <reason>` if this is wrong</sub>")
+        parts.append("<sub>Orbit · reply `/bot dispute " + _key(f.key) + " <reason>` if this is wrong</sub>")
     return "\n\n".join(parts)
 
 
@@ -167,6 +168,8 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
         return shown
 
     out = [MARKER]
+    if cfg.get("comments", {}).get("tag_author") and _GITHUB_LOGIN.fullmatch(pr.author):
+        out.append(f"\nReview for @{pr.author}.\n")
     if state.get("paused"):
         out.append("### Pre-review paused\n\nA maintainer paused automated review on this PR. "
                    "A maintainer can comment `/bot resume` to turn it back on.")
@@ -227,7 +230,7 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
         "- Maintainers: `/bot ready`, `/bot resolve <key>`, `/bot pause`, `/bot resume`, `/bot ignore <check>`\n\n"
         "</details>"
     )
-    out.append(f"\n<sub>Automated pre-review of {pr.head_sha[:7]} by prbot. Maintainers make the final call.</sub>")
+    out.append(f"\n<sub>Automated pre-review of {pr.head_sha[:7]} by Orbit. Maintainers make the final call.</sub>")
     out.append(f"<!-- prbot:state {encode_state(state)} -->")
     return "\n".join(out)
 

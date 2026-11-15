@@ -198,8 +198,8 @@ def cmd_pins(args, gh) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="prbot", description="Repo-agnostic PR pre-review bot")
-    p.add_argument("--version", action="version", version=f"prbot {__version__}")
+    p = argparse.ArgumentParser(description="Orbit reviews GitHub pull requests")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--dry-run", action="store_true", help="read from GitHub but write nothing; print comments")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--workspace", help="local clone of the repo, used to run linters and fixers")

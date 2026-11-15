@@ -1,6 +1,8 @@
-# prbot
+# Orbit
 
-A pre-review bot for GitHub pull requests that works on any repository. It finds problems, then either
+<img src="docs/orbit-logo.png" alt="Orbit logo" width="96" height="96">
+
+Orbit pre-reviews GitHub pull requests on any repository. It finds problems, then either
 **fixes them** or **comments so the author can fix them**. A PR reaches the maintainer queue
 (`bot:ready-for-review`) only once nothing blocks it.
 
@@ -51,6 +53,8 @@ autofix:
   suggestions when the branch cannot be updated. Set `update_branch: false` to keep branch
   synchronization manual. Model findings remain review feedback for the author.
 
+Set `comments.tag_author: true` to mention the PR author in the summary comment.
+
 ## Hermes setup
 
 Any OpenAI-compatible server works: vLLM, SGLang, Ollama, llama.cpp or a hosted endpoint.
@@ -88,20 +92,20 @@ export GITHUB_TOKEN=...   # any token that can read the repo
 Print the comment the bot would post on one PR, without writing anything:
 
 ```bash
-prbot --dry-run review OWNER/REPO 123
+orbit --dry-run review OWNER/REPO 123
 ```
 
 Scan the backlog and write a report:
 
 ```bash
-prbot --dry-run sweep OWNER/REPO --limit 50 --report backlog.md
+orbit --dry-run sweep OWNER/REPO --limit 50 --report backlog.md
 ```
 
 To also run linters and fixers, pass a clone of the repo:
 
 ```bash
 git clone https://github.com/OWNER/REPO /tmp/repo
-prbot --dry-run --workspace /tmp/repo review OWNER/REPO 123
+orbit --dry-run --workspace /tmp/repo review OWNER/REPO 123
 ```
 
 ## Install on a repository (maintainers)
@@ -113,8 +117,8 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 | [prereview-analyze.yml](examples/prereview-analyze.yml) | `pull_request` | read-only token, no secrets | Runs the repo's linters on the PR and uploads the results as an artifact |
 | [prereview-workflow.yml](examples/prereview-workflow.yml) | `pull_request_target`, `issue_comment`, `workflow_run`, schedule | write comments, labels, statuses | Reviews, comments, labels and fixes. Never runs PR code; reads the artifact as untrusted data |
 
-1. Copy a trusted prbot checkout into `.github/actions/prbot/` in the target repository. If you
-   host prbot as a separate action, update the `uses:` lines to a pinned commit the target can access.
+1. Copy a trusted Orbit checkout into `.github/actions/prbot/` in the target repository. If you
+   host Orbit as a separate action, update the `uses:` lines to a pinned commit the target can access.
 2. Copy both example workflows into `.github/workflows/`. Put the review workflow on the default
    branch to receive completion events. List your CI workflow's name under `workflow_run` so the
    bot re-checks when CI finishes. The review workflow queues writes for the repository in one group.
@@ -126,6 +130,11 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 4. If the bot posts with a GitHub App token, set the action's `bot-login` input to the app's login
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
+
+This repository's workflow uses a GitHub App when `PRBOT_APP_ID` is set as a repository variable
+and `PRBOT_APP_PRIVATE_KEY` is stored as a repository secret. Install the app only on the repository
+it reviews, with read access to Actions, Checks and Contents and write access to Issues,
+Pull requests and Commit statuses.
 
 On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
 from the runner's environment. Explicit action inputs take precedence. With `setup-python: "false"`,
@@ -191,7 +200,7 @@ Org membership alone is not enough.
   marked as untrusted in the prompt.
 - Deep reviews are capped per run (`llm.max_reviews_per_run`) and cached per commit, so re-runs on the
   same commit cost nothing.
-- Running `prbot review --workspace` locally runs the repo's tools on your machine. Use a dedicated clone.
+- Running `orbit review --workspace` locally runs the repo's tools on your machine. Use a dedicated clone.
   The bot refuses to run if the clone has uncommitted changes.
 
 ## Development
