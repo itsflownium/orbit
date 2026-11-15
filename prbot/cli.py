@@ -26,6 +26,7 @@ from .github import GitHub
 from .runner import render_report, review_pr, sweep
 
 log = logging.getLogger("prbot")
+DEFAULT_CATCH_UP_LIMIT = 20
 
 
 def _print_result(res: dict, verbose: bool) -> None:
@@ -37,8 +38,9 @@ def _print_result(res: dict, verbose: bool) -> None:
     elif res.get("pushed"):
         print(f"{head}: pushed fixes for {', '.join(res.get('fixed', []))}")
     else:
-        print(f"{head}: {'READY' if res.get('ready') else 'NEEDS CHANGES'} "
-              f"({res.get('blocking', 0)} blocking, {res.get('advisory', 0)} advisory)")
+        status = "READY" if res.get("ready") else "WAITING" if res.get("status") == "pending" else "NEEDS CHANGES"
+        waiting = "; waiting for " + ", ".join(res["waiting_on"]) if res.get("waiting_on") else ""
+        print(f"{head}: {status} ({res.get('blocking', 0)} blocking, {res.get('advisory', 0)} advisory{waiting})")
     if verbose and res.get("body"):
         print("-" * 72 + "\n" + res["body"] + "\n" + "-" * 72)
 
@@ -70,7 +72,7 @@ def _local_analyzer(gh: GitHub, workspace: str | None, enabled: bool):
 
 def cmd_review(args, gh: GitHub) -> int:
     res = review_pr(gh, args.repo, args.number, workspace=args.workspace, force=args.force,
-                    include_drafts=args.force, force_fix=args.fix,
+                    include_drafts=args.force or args.fresh_model, force_fix=args.fix, fresh_model=args.fresh_model,
                     analyze_fn=_local_analyzer(gh, args.workspace, not args.no_lint))
     _print_result(res, verbose=args.dry_run or args.verbose)
     return 1 if res.get("error") else 0
@@ -176,12 +178,23 @@ def cmd_event(args, gh: GitHub) -> int:
         return int(failed)
     elif name in ("schedule", "workflow_dispatch"):
         inputs = event.get("inputs") or {}
+        fresh_model = str(inputs.get("fresh_model", "false")).lower() == "true"
         if inputs.get("pr"):
-            res = review_pr(gh, repo, int(inputs["pr"]), workspace=ws, force=True, include_drafts=True)
+            res = review_pr(gh, repo, int(inputs["pr"]), workspace=ws, force=True, include_drafts=True,
+                            fresh_model=fresh_model)
             _print_result(res, verbose)
             return int(bool(res.get("error")))
         else:
-            limit = int(inputs.get("limit") or os.environ.get("PRBOT_SWEEP_LIMIT") or 0) or None
+            if fresh_model:
+                log.error("fresh_model requires a pull request number")
+                return 2
+            try:
+                limit = int(inputs.get("limit") or os.environ.get("PRBOT_SWEEP_LIMIT") or DEFAULT_CATCH_UP_LIMIT)
+                if limit < 1:
+                    raise ValueError
+            except ValueError:
+                log.error("The catch-up limit must be a positive integer")
+                return 2
             results = sweep(gh, repo, limit=limit, workspace=ws, on_result=lambda r: _print_result(r, verbose))
             report = render_report(repo, results)
             summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -221,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("repo")
     r.add_argument("number", type=int)
     r.add_argument("--force", action="store_true", help="re-review even if nothing changed")
+    r.add_argument("--fresh-model", action="store_true", help="request new model output for this PR")
     r.add_argument("--fix", action="store_true", help="try to commit automatic fixes")
     r.add_argument("--no-lint", action="store_true", help="do not run the repo's linters locally")
 

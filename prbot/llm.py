@@ -32,6 +32,9 @@ from .workspace import server_url
 
 log = logging.getLogger(__name__)
 
+# Bump when model output validation or normalization changes, including count_examples.py.
+REVIEW_CACHE_VERSION = 1
+
 TRIAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

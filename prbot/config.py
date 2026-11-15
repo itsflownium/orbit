@@ -36,6 +36,7 @@ DEFAULTS: dict[str, Any] = {
         "ci": {
             "enabled": True,
             "severity": "blocking",
+            "required": [],  # exact check-run names or commit-status contexts that must report
             "ignore": ["pre-review"],
             # Gate jobs that only fail because another job failed. Hidden when a real failure
             # is listed, so authors see the job that actually broke.
@@ -228,7 +229,18 @@ def _normalize(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_config_dict(user: dict[str, Any]) -> Config:
-    return Config(deep_merge(DEFAULTS, _normalize(user or {})))
+    cfg = Config(deep_merge(DEFAULTS, _normalize(user or {})))
+    ci = cfg.check("ci")
+    for field in ("required", "ignore"):
+        names = ci[field]
+        if not isinstance(names, list) or any(not isinstance(n, str) or not n.strip() for n in names):
+            raise ValueError(f"checks.ci.{field} must be a list of nonempty check names")
+    context = cfg["status_context"]
+    if not isinstance(context, str) or not context.strip():
+        raise ValueError("status_context must be a nonempty string")
+    if set(ci["required"]) & {*ci["ignore"], context}:
+        raise ValueError("checks.ci.required cannot include ignored checks or Orbit's own status")
+    return cfg
 
 
 def parse_config(text: str | None) -> Config:

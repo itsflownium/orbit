@@ -5,8 +5,7 @@ analysis job (prbot/analyzer.py), either passed in or downloaded as an artifact.
 
 Outcomes, and the commit status each one sets:
   blocking findings                         -> failure  + bot:needs-changes
-  only disputed blockers left               -> pending  + bot:disputed (a maintainer decides)
-  clean, but lint analysis not reported yet -> pending  (no ready label)
+  disputed blockers or required checks pending -> pending  (no ready label)
   clean, or a maintainer said /bot ready    -> success  + bot:ready-for-review
 """
 
@@ -46,7 +45,8 @@ def _now() -> float:
 
 
 def _config_hash(cfg: Config) -> str:
-    return hashlib.sha1(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:10]
+    inputs = (cfg, llm.REVIEW_CACHE_VERSION)
+    return hashlib.sha1(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:10]
 
 
 def _guidelines(gh, pr, shared: dict) -> str | None:
@@ -61,19 +61,19 @@ def _guidelines(gh, pr, shared: dict) -> str | None:
     return shared[key]
 
 
-def _load_cfg(gh, pr, shared: dict, notes: list[str]) -> Config:
+def _load_cfg(gh, pr, shared: dict, notes: list[str]) -> tuple[Config, bool]:
     key = ("config", pr.repo, pr.base_ref, pr.base_sha)
     err_key = ("config_error", pr.repo, pr.base_ref, pr.base_sha)
     if key not in shared:
         try:
             shared[key] = load_config(gh, pr.repo, pr.base_ref)
-        except ValueError as e:  # invalid YAML or shape: keep reviewing with defaults
+        except ValueError as e:  # keep reporting checks but don't mark the PR ready
             log.warning("invalid prereview config: %s", e)
-            shared[key] = parse_config("autofix: {mode: comment}")
+            shared[key] = parse_config("autofix: {mode: comment}\nllm: {provider: none}")
             shared[err_key] = str(e)
     if shared.get(err_key):
-        notes.append(f"The repo's prereview config is invalid and was ignored: {shared[err_key]}")
-    return shared[key]
+        notes.append(f"Fix the repository's prereview config: {shared[err_key]}.")
+    return shared[key], err_key not in shared
 
 
 def _analysis_required(cfg: Config) -> bool:
@@ -122,7 +122,7 @@ def _fingerprint(state: dict, pr, ci_fp: str, cfg_hash: str) -> None:
 
 
 def review_pr(gh, repo: str, number: int, *, workspace: str | None = None, shared: dict | None = None,
-              force: bool = False, include_drafts: bool = False, force_fix: bool = False,
+              force: bool = False, include_drafts: bool = False, force_fix: bool = False, fresh_model: bool = False,
               analysis: Any = None, analyze_fn: Callable[[Any, Config], Any] | None = None,
               mutate_state: Callable[[dict], None] | None = None) -> dict[str, Any]:
     """Review one PR. If another run changes the PR's command state meanwhile, start over so the
@@ -130,15 +130,15 @@ def review_pr(gh, repo: str, number: int, *, workspace: str | None = None, share
     shared = shared if shared is not None else {}
     for attempt in range(3):
         try:
-            return _review_once(gh, repo, number, workspace=workspace, shared=shared, force=force,
-                                include_drafts=include_drafts, force_fix=force_fix, analysis=analysis,
+            return _review_once(gh, repo, number, workspace=workspace, shared=shared, force=force or fresh_model,
+                                include_drafts=include_drafts, force_fix=force_fix, fresh_model=fresh_model, analysis=analysis,
                                 analyze_fn=analyze_fn, mutate_state=mutate_state, last_try=attempt == 2)
         except _Restart:
             log.info("PR #%s changed during the review; starting over", number)
     return {"repo": repo, "number": number, "skipped": "PR changed during each attempt"}
 
 
-def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, force_fix, analysis,
+def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, force_fix, fresh_model, analysis,
                  analyze_fn, mutate_state, last_try) -> dict[str, Any]:
     pr = gh.get_pr(repo, number, with_files=False)
     result: dict[str, Any] = {"repo": repo, "number": number, "title": pr.title, "author": pr.author}
@@ -146,7 +146,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
         return {**result, "skipped": "closed"}
 
     notes: list[str] = []
-    cfg = _load_cfg(gh, pr, shared, notes)
+    cfg, cfg_valid = _load_cfg(gh, pr, shared, notes)
     if not cfg.get("enabled", True):
         return {**result, "skipped": "disabled by config"}
     if pr.author in cfg.get("skip_authors", []):
@@ -154,6 +154,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
 
     comments = gh.issue_comments(pr.repo, pr.number)
     comment_id, state = commenter.summary_in(gh, comments)
+    previous_body = next((c.get("body") for c in comments if c.get("id") == comment_id), None)
     loaded = copy.deepcopy(state)  # snapshot, to detect a concurrent run's changes
 
     # ---- /bot commands posted since the last run (even if their own run was cancelled)
@@ -174,6 +175,8 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
     cfg_hash = _config_hash(cfg)
     ci_fp = ci_fingerprint(gh, pr, cfg, shared) if cfg.check_enabled("ci") else ""
     ctx = Context(pr=pr, gh=gh, cfg=cfg, workspace=workspace, shared=shared, notes=notes)
+    if not cfg_valid:
+        ctx.pending_checks.add("config")
     overlap_fp = ""
     ignored = set(state.get("ignored", []))
     if cfg.check_enabled("overlap") and "overlap" not in ignored and not state.get("paused"):
@@ -208,9 +211,9 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
         _fingerprint(state, pr, ci_fp, cfg_hash)
         state.update(stale=bool(is_stale), ready=False, lint_pending=False, llm_pending=False,
                      pending_checks=[], overlap_fp=overlap_fp)
-        body = commenter.render(pr, [], [], state, cfg)
         commenter.sync_labels(gh, pr, cfg, {"paused"}, shared, current=gh.get_labels(pr.repo, pr.number))
-        gh.set_status(pr.repo, pr.head_sha, "pending", cfg["status_context"], "Paused by a maintainer")
+        _set_status(gh, pr, cfg, state, "pending", "Paused by a maintainer", force=force)
+        body = commenter.render(pr, [], [], state, cfg)
         _publish(gh, pr, comment_id, body, state, loaded, last_try)
         _reply(gh, pr, pending)
         return {**result, "paused": True, "body": body}
@@ -265,7 +268,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
     state["llm_pending"] = False
     if rc.get("enabled") and "llm_review" not in ignored:
         clean = override or not (lint_pending or ctx.pending_checks or any(f.blocking for f in findings))
-        triage, model_findings, done = _model_review(ctx, clean, state, rc)
+        triage, model_findings, done = _model_review(ctx, clean, state, rc, fresh=fresh_model)
         state["llm_pending"] = not done
         model_findings = [f for f in model_findings if f.key not in resolved]
         for f in model_findings:
@@ -320,17 +323,26 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
     if state["stale"]:
         wanted.add("stale")
     commenter.sync_labels(gh, pr, cfg, wanted, shared, current=gh.get_labels(pr.repo, pr.number))
-    gh.set_status(pr.repo, pr.head_sha, status, cfg["status_context"], desc)
+    _set_status(gh, pr, cfg, state, status, desc, force=force)
     inline_limit = cfg["comments"]["max_inline"]
     posted = commenter.post_inline(gh, pr, [f for f in findings if f.check != "autofix"], state, inline_limit,
                                    allow_suggestions=fix_mode != "comment")
     posted += commenter.post_inline(gh, pr, [f for f in findings if f.check == "autofix"], state, max(inline_limit, 10))
     body = commenter.render(pr, findings, ctx.notes, state, cfg, fixed=fixed, triage=triage)
-    _publish(gh, pr, comment_id, body, state, loaded, last_try)
+    if body != previous_body:
+        _publish(gh, pr, comment_id, body, state, loaded, last_try)
     _reply(gh, pr, pending)
 
+    waiting_on = sorted(ctx.pending_checks)
+    if lint_pending:
+        waiting_on.append("lint analysis")
+    if state["llm_pending"]:
+        waiting_on.append("model review")
+    if disputed_blockers:
+        waiting_on.append("maintainer decision")
     return {**result, "blocking": len(blocking), "advisory": len(findings) - len(blocking),
-            "inline_posted": posted, "ready": status == "success", "status": status, "findings": findings,
+            "inline_posted": posted, "ready": status == "success", "status": status, "waiting_on": waiting_on,
+            "findings": findings,
             "body": body, "blocking_titles": [f.title for f in blocking]}
 
 
@@ -346,6 +358,13 @@ def _check_concurrent(gh, pr, loaded: dict, last_try: bool) -> None:
     _, latest = commenter.find_summary(gh, pr)
     if not last_try and any(latest.get(k) != loaded.get(k) for k in COMMAND_KEYS + FINGERPRINT_KEYS):
         raise _Restart()
+
+
+def _set_status(gh, pr, cfg, state, status, description, *, force):
+    report = [pr.head_sha, cfg["status_context"], status, description]
+    if force or report != state.get("reported_status"):
+        gh.set_status(pr.repo, pr.head_sha, status, cfg["status_context"], description)
+        state["reported_status"] = report
 
 
 def _publish(gh, pr, comment_id, body, state, loaded, last_try) -> None:
@@ -380,12 +399,17 @@ def _reply(gh, pr, pending) -> None:
         gh.create_comment(pr.repo, pr.number, reply)
 
 
-def _model_review(ctx: Context, clean: bool, state: dict, rc: dict) -> tuple[dict | None, list[Finding], bool]:
+def _model_review(ctx: Context, clean: bool, state: dict, rc: dict, *, fresh: bool) -> tuple[dict | None, list[Finding], bool]:
     """Returns (triage, findings, done). done=False means it still has to run for this commit."""
     pr, cfg, shared = ctx.pr, ctx.cfg, ctx.shared
     severity = rc.get("severity", "advisory")
-    inputs = [pr.base_ref, pr.title, pr.body, cfg["llm"], rc, llm.TRIAGE_SYSTEM, llm.REVIEW_SYSTEM]
+    inputs = [pr.base_ref, pr.title, pr.body, cfg["llm"], rc, llm.TRIAGE_SYSTEM, llm.REVIEW_SYSTEM,
+              llm.REVIEW_CACHE_VERSION]
     model_fp = hashlib.sha1(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    if fresh:
+        # A failed fresh review must stay pending instead of falling back to an older cached answer.
+        for key in ("llm_sha", "llm_fp", "llm_findings", "triage"):
+            state.pop(key, None)
     if state.get("llm_sha") == pr.head_sha and state.get("llm_fp") == model_fp:
         cached = []
         for d in state.get("llm_findings", []):
@@ -415,6 +439,10 @@ def _model_review(ctx: Context, clean: bool, state: dict, rc: dict) -> tuple[dic
         ctx.notes.append("Model review skipped: this run's review budget is used up; it will run on the next pass.")
         return None, [], False
     shared["llm_reviews"] = shared.get("llm_reviews", 0) + 1
+    log.info("Requesting %smodel review for PR #%s with %s (%s)", "fresh " if fresh else "",
+             pr.number, llm.model_for(cfg, "review_model"), llm.resolve_provider_name(cfg))
+    if fresh:
+        ctx.notes.append("A fresh model review was requested for this commit.")
 
     out: list[Finding] = []
     triage = llm.triage(provider, cfg, pr, ctx.files)
@@ -473,13 +501,14 @@ def render_report(repo: str, results: list[dict]) -> str:
     ready = [r for r in reviewed if r.get("ready")]
     needs = [r for r in reviewed if not r.get("ready") and r.get("blocking")]
     waiting = [r for r in reviewed if not r.get("ready") and not r.get("blocking")]
+    pending = [r for r in reviewed if r.get("waiting_on")]
     skipped = [r for r in results if r.get("skipped") not in (None, "unchanged") or r.get("paused")]
     errors = [r for r in results if r.get("error")]
     lines = [f"# prbot backlog report: {repo}", "", f"Generated {when}. {len(results)} open PRs scanned.", "",
              "| Bucket | PRs |", "| --- | --- |",
              f"| Ready for maintainer review | {len(ready)} |",
              f"| Needs changes from the author | {len(needs)} |",
-             f"| Waiting (lint analysis or a disputed finding) | {len(waiting)} |",
+             f"| Waiting for checks or a decision | {len(waiting)} |",
              f"| Skipped (draft, paused, bot author) | {len(skipped)} |",
              f"| Errors | {len(errors)} |", ""]
     if ready:
@@ -491,6 +520,10 @@ def render_report(repo: str, results: list[dict]) -> str:
         lines += ["## Needs changes", ""]
         for r in needs:
             lines.append(f"- #{r['number']} {r['title']} ({r['author']}): " + "; ".join(r.get("blocking_titles", [])[:3]))
+        lines.append("")
+    if pending:
+        lines += ["## Still waiting", ""]
+        lines += [f"- #{r['number']} {commenter.clean(r['title'])}: " + ", ".join(r["waiting_on"]) for r in pending]
         lines.append("")
     if errors:
         lines += ["## Errors", ""] + [f"- #{r['number']}: {r['error']}" for r in errors] + [""]
