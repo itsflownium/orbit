@@ -67,6 +67,19 @@ def test_clean_blocks_mentions_and_comment_markers():
     assert "@nous" not in out and "<!--" not in out and "-->" not in out
 
 
+def test_only_explicit_author_mentions_are_enabled():
+    pr = PullRequest.from_api(pr_data())
+    cfg = parse_config("comments: {tag_author: true}")
+    notes = ["Untrusted log mentioning @someone"]
+    body = commenter.render(pr, [], notes, {}, cfg)
+    assert body.count(f"@{pr.author}") == 1
+    assert "@someone" not in body
+    assert f"@{pr.author}" not in commenter.render(pr, [], notes, {}, parse_config(None))
+
+    pr.author = "alice @someone"
+    assert "@alice" not in commenter.render(pr, [], notes, {}, cfg)
+
+
 # ------------------------------------------------------------------ re-check triggers (correctness #2, #6, #9)
 
 def test_ci_rerun_on_same_commit_is_picked_up():

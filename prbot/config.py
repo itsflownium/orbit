@@ -144,6 +144,7 @@ DEFAULTS: dict[str, Any] = {
     "comments": {
         "max_inline": 5,
         "stale_days": 21,
+        "tag_author": False,
     },
     "analysis": {
         # Download lint results from the separate, secret-free analysis job (see README).

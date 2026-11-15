@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prbot"
 version = "0.1.0"
-description = "Repo-agnostic PR pre-review bot: cheap checks first, comments or auto-fixes issues so maintainers only see clean PRs."
+description = "Orbit reviews GitHub pull requests, comments on findings, and can apply supported lint fixes."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pyyaml>=6", "certifi"]
@@ -15,6 +15,7 @@ anthropic = ["anthropic>=0.120"]
 dev = ["pytest>=8"]
 
 [project.scripts]
+orbit = "prbot.cli:main"
 prbot = "prbot.cli:main"
 
 [tool.setuptools.packages.find]

@@ -1,4 +1,4 @@
-name: prbot pre-review
+name: Orbit pre-review
 description: Cheap automated pre-review for pull requests. Comments on issues or fixes them so maintainers only review clean PRs.
 branding:
   icon: check-circle
@@ -59,7 +59,7 @@ runs:
       with:
         python-version: "3.12"
 
-    - name: Install prbot
+    - name: Install Orbit
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -122,7 +122,7 @@ runs:
         retention-days: 7
 
     # ---------------------------------------------------------------- review mode
-    - name: Run prbot
+    - name: Run Orbit
       if: inputs.mode != 'analyze'
       shell: bash
       env:
