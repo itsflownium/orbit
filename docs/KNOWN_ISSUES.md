@@ -12,13 +12,13 @@
 - In commit mode a test fix removed one unused import from a test branch. The
   new commit triggered GitHub Actions. The default workflow token resolved to
   `github-actions[bot]` in the analysis job.
+- Analysis and CI completions on this repository start the native
+  `workflow_run` writer on `main`.
 
 ## Remaining integration checks
 
-- Install the review listener on the default branch to verify GitHub's native
-  `workflow_run` delivery and the serialized review queue. Test contributor
-  approval, fork review and permitted fork fixes in a repository that accepts
-  forks.
+- Test contributor approval, fork review and permitted fork fixes in a
+  repository that accepts forks.
 - Verify end-to-end review and fix using a GitHub App installation token. The
   review action accepts an explicit `bot-login` for App installations.
 - The live model test used Hermes Agent as the gateway. The vLLM/SGLang example
