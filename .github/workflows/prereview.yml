@@ -49,8 +49,27 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Validate review identity
+        shell: bash
+        env:
+          REVIEW_IDENTITY: ${{ vars.PRBOT_REVIEW_IDENTITY }}
+          USER_REVIEW_TOKEN: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN || '' }}
+        run: |
+          case "$REVIEW_IDENTITY" in
+            ''|bot) ;;
+            user)
+              if [ -z "$USER_REVIEW_TOKEN" ]; then
+                echo '::error::User review mode requires the PRBOT_USER_REVIEW_TOKEN secret.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::PRBOT_REVIEW_IDENTITY must be bot or user.'
+              exit 1
+              ;;
+          esac
       - name: Create Orbit installation token
-        if: vars.PRBOT_APP_ID != ''
+        if: vars.PRBOT_REVIEW_IDENTITY != 'user' && vars.PRBOT_APP_ID != ''
         id: orbit-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
@@ -64,7 +83,7 @@ jobs:
           permission-statuses: write
       - uses: ./
         with:
-          github-token: ${{ steps.orbit-token.outputs.token || github.token }}
+          github-token: ${{ (vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN) || steps.orbit-token.outputs.token || github.token }}
           bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
