@@ -6,7 +6,7 @@ checks:
   llm_review:
     only_when_clean: false
 autofix:
-  mode: commit
+  mode: comment
   update_branch: false
 labels:
   needs_changes: 'prbot-smoke:needs-changes'
