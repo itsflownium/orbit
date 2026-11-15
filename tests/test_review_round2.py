@@ -10,7 +10,7 @@ import zipfile
 import pytest
 import yaml
 
-from prbot import analyzer, commenter, llm, patches
+from prbot import analyzer, commands, commenter, llm, patches
 from prbot import github as ghmod
 from prbot.checks import Context
 from prbot.commenter import decode_state
@@ -239,6 +239,30 @@ def test_action_passes_the_bot_login_through():
 def test_login_prefers_the_configured_value(monkeypatch):
     monkeypatch.setenv("PRBOT_LOGIN", "my-app[bot]")
     assert GitHub(token="t").login() == "my-app[bot]"
+
+
+def test_human_review_account_can_run_commands_without_replaying_its_summary(monkeypatch):
+    github = GitHub(token="user-token")
+
+    def request(method, path):
+        assert (method, path) == ("GET", "/user")
+        return {"login": "alice"}
+
+    monkeypatch.setattr(github, "request", request)
+    assert github.login() == "alice"
+
+    gh = make_gh()
+    gh.bot_login = github.login()
+    gh.permissions["alice"] = "write"
+    user = {"type": "User", "login": "alice"}
+    comments = [{"id": 100, "user": user, "body": f"{commenter.MARKER}\n/bot ignore lint"},
+                {"id": 101, "user": user, "body": "/bot pause"}]
+    state = {}
+    pending = commands.collect(gh, "acme/widget", "alice", comments, state)
+    for apply in pending.mutations:
+        apply(state)
+    assert pending.comment_ids == [101]
+    assert state == {"paused": True}
 
 
 # ------------------------------------------------------------------ concurrency config (M7 / S5)

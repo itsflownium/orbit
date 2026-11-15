@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 _CMD = re.compile(r"^[ \t]*/bot[ \t]+(\w+)(?:[ \t]+([^\r\n]*))?\r?$", re.M)
 
-HELP = """**prbot commands**
+HELP = """**Orbit commands**
 
 - `/bot recheck` — run the checks again
 - `/bot fix` — request an automatic lint fix when the repository allows it
@@ -51,7 +51,7 @@ class Pending:
 def collect(gh, repo: str, pr_author: str, comments: list[dict], state: dict) -> Pending:
     """Every `/bot` comment newer than the last one applied. Reading them from the PR (not only
     from the triggering event) means a cancelled or skipped workflow run never loses a command."""
-    from .commenter import is_bot_comment
+    from .commenter import MARKER, is_bot_comment
 
     seen = int(state.get("cmd_seen") or 0)
     mutations: list = []
@@ -72,9 +72,10 @@ def collect(gh, repo: str, pr_author: str, comments: list[dict], state: dict) ->
         if cid <= seen:
             continue
         user = c.get("user") or {}
-        if user.get("type") == "Bot" or is_bot_comment(gh, c):
+        body = c.get("body") or ""
+        if user.get("type") == "Bot" or (MARKER in body and is_bot_comment(gh, c)):
             continue
-        cmds = parse(c.get("body") or "")
+        cmds = parse(body)
         if not cmds:
             continue
         last = max(last, cid)

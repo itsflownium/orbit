@@ -156,18 +156,29 @@ def cmd_event(args, gh: GitHub) -> int:
             return 0
         res = review_pr(gh, repo, event["pull_request"]["number"], workspace=ws, force=action == "edited")
         _print_result(res, verbose)
+        return int(bool(res.get("error")))
     elif name == "issue_comment":
         res = handle_comment(gh, event, workspace=ws)
         print(json.dumps({k: v for k, v in res.items() if k not in ("body", "findings")}, default=str))
+        return int(bool(res.get("error")))
     elif name == "workflow_run":
         # CI or the analysis job finished: results changed on the same commit, so always re-review
-        for n in _event_prs(gh, repo, event.get("workflow_run") or {}):
-            _print_result(review_pr(gh, repo, n, workspace=ws, force=True), verbose)
+        run = event.get("workflow_run") or {}
+        numbers = _event_prs(gh, repo, run)
+        if not numbers:
+            print(f"No open pull requests matched completed workflow run {run.get('id', 'unknown')}.")
+        failed = False
+        for number in numbers:
+            res = review_pr(gh, repo, number, workspace=ws, force=True)
+            _print_result(res, verbose)
+            failed = failed or bool(res.get("error"))
+        return int(failed)
     elif name in ("schedule", "workflow_dispatch"):
         inputs = event.get("inputs") or {}
         if inputs.get("pr"):
-            _print_result(review_pr(gh, repo, int(inputs["pr"]), workspace=ws, force=True, include_drafts=True),
-                          verbose)
+            res = review_pr(gh, repo, int(inputs["pr"]), workspace=ws, force=True, include_drafts=True)
+            _print_result(res, verbose)
+            return int(bool(res.get("error")))
         else:
             limit = int(inputs.get("limit") or os.environ.get("PRBOT_SWEEP_LIMIT") or 0) or None
             results = sweep(gh, repo, limit=limit, workspace=ws, on_result=lambda r: _print_result(r, verbose))

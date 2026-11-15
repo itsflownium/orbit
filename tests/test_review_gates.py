@@ -237,6 +237,23 @@ def test_fork_completion_filters_server_side_and_matches_the_exact_head(monkeypa
     assert cli._event_prs(gh, REPO, run) == [1]
 
 
+def test_workflow_run_reports_any_review_error_and_runs_other_matches(monkeypatch, tmp_path, capsys):
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"workflow_run": {"id": 17}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.setattr(cli, "_event_prs", lambda gh, repo, run: [1, 2])
+    monkeypatch.setattr(cli, "review_pr", lambda gh, repo, number, **kwargs: {
+        "number": number, **({"error": "write failed"} if number == 1 else {"ready": True}),
+    })
+
+    args = SimpleNamespace(workspace=None, verbose=False, dry_run=False)
+    assert cli.cmd_event(args, _pr()) == 1
+    output = capsys.readouterr().out
+    assert "ERROR write failed" in output and "#2 : READY" in output
+
+
 def test_fix_mode_leaves_a_dirty_workspace_intact(monkeypatch, tmp_path):
     ws = git_repo(tmp_path, {"m.py": "x = 1\n"})
     local = Path(ws, "m.py")
