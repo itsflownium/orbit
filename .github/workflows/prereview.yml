@@ -27,11 +27,18 @@ jobs:
     runs-on: ${{ (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
+      - name: Mask local runner paths
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          if [ -n "${HOME:-}" ]; then printf '::add-mask::%s\n' "$HOME"; fi
+          if [ -n "${PRBOT_LLM_API_KEY:-}" ]; then printf '::add-mask::%s\n' "$PRBOT_LLM_API_KEY"; fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./
         with:
+          setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
           llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}
