@@ -81,4 +81,5 @@ tests in `tests/test_review_findings.py` and `tests/test_review_round2.py`.
 - A finding's `key` must stay the same across runs, because disputes, inline de-duplication and the
   "fixed" checklist all depend on it.
 - Model calls are budgeted (`llm.max_reviews_per_run`) and cached per head commit. Keep it that way;
-  the point of the project is that it's cheap.
+  the point of the project is that it's cheap. Bump `llm.REVIEW_CACHE_VERSION` when model output
+  validation or normalization changes.

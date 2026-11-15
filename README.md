@@ -95,6 +95,9 @@ Print the comment the bot would post on one PR, without writing anything:
 orbit --dry-run review OWNER/REPO 123
 ```
 
+Use `orbit review OWNER/REPO 123 --fresh-model` to request a new model review for the same commit.
+An ordinary recheck can reuse the last model result to avoid extra inference calls.
+
 Scan the backlog and write a report:
 
 ```bash
@@ -163,10 +166,21 @@ Otherwise PRs stay "waiting for lint results".
 | pending | A required check, lint analysis, or model review needs to finish before the PR is ready. Paused reviews and unresolved disputes over blockers are also pending. |
 | success | Nothing blocks (or a maintainer said `/bot ready`), and the PR gets `bot:ready-for-review` |
 
+Set `checks.ci.required` to the exact check names or commit-status contexts you expect (for example,
+`[test]`). With blocking CI, Orbit waits for those results even if no check has started yet. Cancelled
+or stale runs need to be rerun. Orbit also waits while GitHub is calculating mergeability.
+
+The scheduled `prereview` catch-up checks the 20 most recently updated open PRs by default. It retries
+pending model reviews and lists PRs still waiting for lint in the Actions job summary. If a lint result
+is missing or stale, rerun the analysis for that PR. Set `PRBOT_SWEEP_LIMIT` in the workflow to change
+the batch size.
+
 ## Commands (comment on the PR)
 
 Start the comment with a `/bot` command. Maintainers can also recheck a single PR from the
-`prereview` workflow's **Run workflow** button on the default branch.
+`prereview` workflow's **Run workflow** button on the default branch. Enter the PR number and select
+**Request a fresh model review** to bypass that PR's model cache. Leave the number blank to run a
+catch-up sweep on demand.
 
 | Command | Who | Effect |
 | --- | --- | --- |

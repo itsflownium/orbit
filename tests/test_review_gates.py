@@ -103,6 +103,55 @@ def test_blocking_ci_awaits_a_final_result(status, conclusion):
     assert "bot:ready-for-review" in gh.labels[1]
 
 
+def test_required_ci_waits_for_the_named_check():
+    gh = _pr()
+    _upload(gh)
+    gh.repo_files[".github/prereview.yml"] += "checks: {ci: {required: [test]}}\n"
+    sha = gh.prs[1]["head"]["sha"]
+    gh.check_runs_by_sha[sha] = [{"id": 1, "name": "build", "status": "completed", "conclusion": "success"}]
+    assert review_pr(gh, REPO, 1)["status"] == "pending"
+    assert "Required CI has not reported for this commit: test" in gh.summary(1)
+    assert "bot:ready-for-review" not in gh.labels.get(1, set())
+
+    gh.statuses_by_sha[sha] = [{"context": "test", "state": "success"}]
+    assert review_pr(gh, REPO, 1)["status"] == "success"
+    assert "bot:ready-for-review" in gh.labels[1]
+
+
+@pytest.mark.parametrize(("conclusion", "expected"), [
+    ("cancelled", "failure"), ("stale", "failure"), ("skipped", "success"), ("neutral", "success"),
+])
+def test_ci_conclusions(conclusion, expected):
+    gh = _pr(required=False)
+    sha = gh.prs[1]["head"]["sha"]
+    gh.check_runs_by_sha[sha] = [{"id": 1, "name": "test", "status": "completed", "conclusion": conclusion}]
+    assert review_pr(gh, REPO, 1)["status"] == expected
+    assert ("bot:ready-for-review" in gh.labels[1]) == (expected == "success")
+    if expected == "failure":
+        assert conclusion in gh.summary(1) and "Rerun the job" in gh.summary(1)
+
+
+def test_review_waits_for_github_to_calculate_mergeability():
+    gh = _pr()
+    _upload(gh)
+    gh.prs[1].update(mergeable=None, mergeable_state="unknown")
+    result = review_pr(gh, REPO, 1)
+    assert result["status"] == "pending" and "mergeable" in result["waiting_on"]
+    assert "bot:ready-for-review" not in gh.labels.get(1, set())
+    gh.prs[1].update(mergeable=True, mergeable_state="clean")
+    assert review_pr(gh, REPO, 1)["status"] == "success"
+
+
+@pytest.mark.parametrize("options", ["ignore: null", "required: test", "required: [pre-review]"])
+def test_invalid_ci_config_cannot_mark_a_pr_ready(options):
+    gh = _pr()
+    _upload(gh)
+    gh.repo_files[".github/prereview.yml"] += f"checks: {{ci: {{{options}}}}}\n"
+    result = review_pr(gh, REPO, 1)
+    assert result["status"] == "pending" and "config" in result["waiting_on"]
+    assert "Fix the repository's prereview config" in gh.summary(1)
+
+
 def _run_analyze_cli(monkeypatch, tmp_path, gh, workspace, *, fetched):
     for name in ("GITHUB_TOKEN", "GH_TOKEN", "PRBOT_PUSH_TOKEN", "ACTIONS_RUNTIME_TOKEN",
                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
@@ -252,6 +301,50 @@ def test_workflow_run_reports_any_review_error_and_runs_other_matches(monkeypatc
     assert cli.cmd_event(args, _pr()) == 1
     output = capsys.readouterr().out
     assert "ERROR write failed" in output and "#2 : READY" in output
+
+
+def test_schedule_bounds_catch_up_and_reports_missing_lint(monkeypatch, tmp_path, capsys):
+    gh = _pr()
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.delenv("PRBOT_SWEEP_LIMIT", raising=False)
+    list_open = gh.list_open_prs
+
+    def list_bounded(repo, *, limit):
+        assert limit == cli.DEFAULT_CATCH_UP_LIMIT
+        return list_open(repo, limit=limit)
+
+    monkeypatch.setattr(gh, "list_open_prs", list_bounded)
+    args = SimpleNamespace(workspace=None, verbose=False, dry_run=False)
+    assert cli.cmd_event(args, gh) == 0
+    assert "WAITING" in capsys.readouterr().out
+    assert "## Still waiting" in summary.read_text() and ": lint analysis" in summary.read_text()
+    assert gh.status_writes[-1]["state"] == "pending"
+    assert cli.cmd_event(args, gh) == 0
+    assert len(gh.status_writes) == 1  # a still-missing artifact doesn't flood the commit with statuses
+
+
+def test_dispatch_fresh_model_requires_one_pr_and_passes_the_flag(monkeypatch, tmp_path):
+    event = tmp_path / "event.json"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    calls = []
+
+    def review(gh, repo, number, **kwargs):
+        calls.append((number, kwargs["fresh_model"]))
+        return {"number": number, "ready": True}
+
+    monkeypatch.setattr(cli, "review_pr", review)
+    args = SimpleNamespace(workspace=None, verbose=False, dry_run=False)
+    event.write_text(json.dumps({"inputs": {"fresh_model": "true"}}))
+    assert cli.cmd_event(args, _pr()) == 2
+    event.write_text(json.dumps({"inputs": {"pr": "38", "fresh_model": "true"}}))
+    assert cli.cmd_event(args, _pr()) == 0
+    assert calls == [(38, True)]
 
 
 def test_fix_mode_leaves_a_dirty_workspace_intact(monkeypatch, tmp_path):

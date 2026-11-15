@@ -6,12 +6,18 @@ on:
     types: [completed]
   issue_comment:
     types: [created]
+  schedule:
+    - cron: '7/10 * * * *'
   workflow_dispatch:
     inputs:
       pr:
-        description: Pull request number to recheck
-        required: true
+        description: Pull request number to recheck (blank = catch up on open PRs)
+        required: false
         type: string
+      fresh_model:
+        description: Request a fresh model review for the specified PR
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -31,6 +37,7 @@ jobs:
        github.event.issue.state == 'open' && github.event.comment.user.type != 'Bot' &&
        (startsWith(github.event.comment.body, '/bot ') ||
         startsWith(github.event.comment.body, format('/bot{0}', fromJSON('"\t"'))))) ||
+      github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
     concurrency:
       group: prbot-review-writes
