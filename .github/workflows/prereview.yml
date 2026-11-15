@@ -6,8 +6,16 @@ on:
     types: [completed]
   issue_comment:
     types: [created]
-  schedule:
-    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_call:
+    secrets:
+      PRBOT_USER_REVIEW_TOKEN:
+        required: false
+      PRBOT_APP_PRIVATE_KEY:
+        required: false
+      PRBOT_LLM_BASE_URL:
+        required: false
+      PRBOT_LLM_API_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       pr:
