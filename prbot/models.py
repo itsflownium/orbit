@@ -24,6 +24,8 @@ class Finding:
     suggestion: str | None = None  # replacement text for a ```suggestion block
     fixable: bool = False  # an autofixer can resolve it
     key: str | None = None  # stable identity across runs; derived if not set
+    recommendation: str = ""  # author-facing repair and verification guidance
+    references: list[str] = field(default_factory=list)  # verified links to related source lines
 
     def __post_init__(self) -> None:
         if not self.key:

@@ -36,6 +36,9 @@ def scrubbed_env() -> dict[str, str]:
 
 def _git_env(token: str | None = None) -> dict[str, str]:
     env = scrubbed_env()
+    for name in tuple(env):
+        if name.startswith(("GIT_CONFIG_", "GIT_TRACE")) or name == "GIT_CURL_VERBOSE":
+            env.pop(name)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_LITERAL_PATHSPECS"] = "1"  # a PR file named '*' must not match everything
@@ -108,6 +111,9 @@ class Workspace:
     def head(self) -> str:
         return self.git_out("rev-parse", "HEAD").strip()
 
+    def current_ref(self) -> str:
+        return self.git_out("symbolic-ref", "-q", "--short", "HEAD").strip() or self.head()
+
     def fetch_pr(self, pr: PullRequest) -> bool:
         """Fetch the PR head and base commits (no checkout, nothing executed)."""
         if not self.is_repo():
@@ -122,8 +128,9 @@ class Workspace:
             return False
         return True
 
-    def checkout(self, rev: str) -> bool:
-        r = self.git("checkout", "--force", "--detach", rev)
+    def checkout(self, rev: str, *, detach: bool = True) -> bool:
+        args = ["--detach"] if detach else []
+        r = self.git("checkout", "--no-overwrite-ignore", *args, rev)
         if r.code != 0:
             log.warning("checkout of %s failed: %s", rev, r.out[-300:])
             return False
@@ -187,22 +194,35 @@ class Workspace:
     def has_credentials(self) -> bool:
         """True if the checkout's own git config holds a token (e.g. actions/checkout without
         persist-credentials: false)."""
-        out = self.git_out("config", "--local", "--get-regexp", r"^(http\..*extraheader|credential\..*|url\..*)$")
+        out = self.git_out("config", "--local", "--includes", "--get-regexp",
+                           r"^(http\..*extraheader|credential\..*|url\..*)$")
         return bool(out.strip())
 
     def commit_and_push(self, pr: PullRequest, paths: list[str], message: str, push_token: str) -> bool:
-        if not pr.head_repo:
+        if not pr.head_repo or self.head() != pr.head_sha:
             return False
-        self.git("add", "--", *paths)
+        r = self.git("add", "--", *paths)
+        if r.code != 0:
+            log.warning("could not stage fixes: %s", r.out[-500:])
+            return False
+        staged = set(self.git_out("diff", "--cached", "--name-only", "-z").rstrip("\0").split("\0"))
+        if not staged <= set(paths):
+            log.warning("refusing to commit unexpected staged changes")
+            return False
         r = self.git("-c", "user.name=prbot", "-c", "user.email=prbot@users.noreply.github.com",
-                     "commit", "-q", "--no-verify", "-m", message)
+                     "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", message)
         if r.code != 0:
             log.warning("commit failed: %s", r.out[-500:])
             return False
         url = f"{server_url()}/{pr.head_repo}.git"
-        r = self.git("push", "--no-verify", url, f"HEAD:refs/heads/{pr.head_ref}", token=push_token)
+        ref = f"refs/heads/{pr.head_ref}"
+        commit = self.head()
+        r = self.git("push", "--no-verify", f"--force-with-lease={ref}:{pr.head_sha}", url,
+                     f"{commit}:{ref}", token=push_token)
         if r.code != 0:
             log.warning("push failed: %s", r.out[-500:])
-            self.git("reset", "--hard", "-q", "HEAD~1")
+            remote = self.git("ls-remote", "--refs", url, ref, token=push_token)
+            if remote.code == 0 and remote.out.split("\t", 1)[0] == commit:
+                return True
             return False
         return True

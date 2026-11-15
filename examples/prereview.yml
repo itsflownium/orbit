@@ -16,7 +16,7 @@ checks:
 execution: same-repo            # never | same-repo | always
 
 autofix:
-  mode: commit                  # commit | suggest | off
+  mode: comment                 # comment | suggest | commit
 
 llm:
   provider: hermes

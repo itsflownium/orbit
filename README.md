@@ -18,14 +18,14 @@ It is built to be cheap. Most checks call no model at all. The model review runs
      A tool that's configured but never enforced never blocks a PR.
    - It uses the version the repo pins (`pyproject`, requirements files, pre-commit), through `uvx` if needed.
    - It reports only problems on lines the PR adds, never code that was already there.
-3. **Fixes:**
-   - `commit` mode pushes a fix commit to the PR branch, or merges base into a stale branch.
-   - `suggest` mode posts GitHub suggestion blocks the author applies in one click.
-   - Without push permission, `commit` falls back to `suggest`.
+3. **Fixes** are controlled by the repository's base-branch configuration. Maintainers can choose
+   feedback for the author, one-click suggestions, or automatic commits for supported lint fixes.
 4. **Hermes review** (budgeted):
    - A small model triages the PR: change type, risk, and whether the description matches the diff.
-   - For PRs that aren't low risk, a larger model looks for bugs and security issues. Each finding must
-     point at a real line in the diff or it is dropped.
+   - A deeper review checks code for actionable defects. Findings point to added lines and explain
+     the condition that causes the problem, the impact, and how to fix and verify it.
+   - Findings can link to related code on the reviewed commit. The bot reads nearby source and any
+     exact paths listed in `checks.llm_review.context_paths`, then verifies each linked line.
 5. **One summary comment, edited in place**, plus inline comments, labels and a `pre-review` commit status.
    It re-checks on every push, and fixed items are ticked off.
 
@@ -35,6 +35,21 @@ based on that repo's CI, PR template and lint setup.
 Nothing is hardcoded per repository. Defaults live in [prbot/config.py](prbot/config.py). Each repository
 can override them in `.github/prereview.yml` (see [examples/prereview.yml](examples/prereview.yml)), which is
 read from the **base branch**, so a PR can't change how it gets reviewed.
+
+### Choose how fixes are applied
+
+```yaml
+autofix:
+  mode: comment
+```
+
+- `comment` explains each finding and leaves the author to edit the branch. Any example
+  replacement is plain code in the comment. `off` and `enabled: false` also select this behavior.
+- `suggest` delivers available patches as GitHub suggestions the author can apply. An authorized
+  `/bot fix` can explicitly request a commit.
+- `commit` applies supported lint and formatter patches with `PRBOT_PUSH_TOKEN`. It falls back to
+  suggestions when the branch cannot be updated. Set `update_branch: false` to keep branch
+  synchronization manual. Model findings remain review feedback for the author.
 
 ## Hermes setup
 
@@ -60,7 +75,8 @@ How it uses Hermes:
 - It puts the JSON schema in the system prompt inside `<schema>` tags.
 - If your server rejects `response_format`, it turns JSON mode off and retries.
 
-Claude is also supported (`llm.provider: anthropic` with `ANTHROPIC_API_KEY`, `pip install "prbot[anthropic]"`).
+For Claude, set `llm.provider: anthropic`. Install with `pip install '.[anthropic]'` from the
+source checkout and set `ANTHROPIC_API_KEY`. In GitHub Actions, use the action's `anthropic-api-key` input.
 
 ## Try it locally (read-only)
 
@@ -97,16 +113,24 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 | [prereview-analyze.yml](examples/prereview-analyze.yml) | `pull_request` | read-only token, no secrets | Runs the repo's linters on the PR and uploads the results as an artifact |
 | [prereview-workflow.yml](examples/prereview-workflow.yml) | `pull_request_target`, `issue_comment`, `workflow_run`, schedule | write comments, labels, statuses | Reviews, comments, labels and fixes. Never runs PR code; reads the artifact as untrusted data |
 
-1. Host this directory as an action repository, or vendor it into the target repo.
-2. Copy both example workflows into `.github/workflows/` and point their `uses:` lines at where the action lives.
-   In `prereview-workflow.yml`, list your CI workflow's name under `workflow_run` so the bot re-checks when CI finishes.
+1. Copy a trusted prbot checkout into `.github/actions/prbot/` in the target repository. If you
+   host prbot as a separate action, update the `uses:` lines to a pinned commit the target can access.
+2. Copy both example workflows into `.github/workflows/`. Put the review workflow on the default
+   branch to receive completion events. List your CI workflow's name under `workflow_run` so the
+   bot re-checks when CI finishes. The review workflow queues writes for the repository in one group.
 3. Optional secrets (privileged workflow only):
    - `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`: your Hermes endpoint.
    - `PRBOT_PUSH_TOKEN`: a GitHub App or fine-grained token with `contents: write`. It's needed for fix
      commits, because pushes made with the default token don't trigger CI.
+   - `PRBOT_ANTHROPIC_API_KEY`: Claude credentials for the optional Claude backend.
 4. If the bot posts with a GitHub App token, set the action's `bot-login` input to the app's login
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
+
+On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
+from the runner's environment. Explicit action inputs take precedence. This repository's installed
+workflow uses `PRBOT_REVIEW_RUNNER` as an optional repository variable for a runner serving Hermes
+locally when analysis completes.
 
 If you don't run the analysis workflow, set `analysis: {required: false}` in `.github/prereview.yml`.
 Otherwise PRs stay "waiting for lint results".
@@ -116,7 +140,7 @@ Otherwise PRs stay "waiting for lint results".
 | Status | When |
 | --- | --- |
 | failure | There are blocking findings for the author to fix |
-| pending | No blockers, but the lint analysis for this commit hasn't reported, or the author disputes a blocking finding and a maintainer hasn't decided |
+| pending | A required check, lint analysis, or model review needs to finish before the PR is ready. Paused reviews and unresolved disputes over blockers are also pending. |
 | success | Nothing blocks (or a maintainer said `/bot ready`), and the PR gets `bot:ready-for-review` |
 
 ## Commands (comment on the PR)
