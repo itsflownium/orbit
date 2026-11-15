@@ -210,7 +210,8 @@ Org membership alone is not enough.
 - Credentials reach git through environment variables for the single fetch or push that needs them. They
   never appear in command arguments or logs, and they're dropped when downloads redirect to another host.
 - Model output is treated as untrusted. It can only become findings anchored to diff lines, and PR text is
-  marked as untrusted in the prompt.
+  marked as untrusted in the prompt. For a simple Python range count with a literal call and expected
+  integer result in the PR description, Orbit checks the current and proposed counts from the source.
 - Deep reviews are capped per run (`llm.max_reviews_per_run`) and cached per commit, so re-runs on the
   same commit cost nothing.
 - Running `orbit review --workspace` locally runs the repo's tools on your machine. Use a dedicated clone.
