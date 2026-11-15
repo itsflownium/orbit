@@ -4,6 +4,14 @@ on:
   workflow_run:
     workflows: [prereview-analyze, test]
     types: [completed]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to recheck
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -16,15 +24,19 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
-       github.event.workflow_run.path == '.github/workflows/test.yml')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
+       (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
+        github.event.workflow_run.path == '.github/workflows/test.yml')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       github.event.issue.state == 'open' && github.event.comment.user.type != 'Bot' &&
+       (startsWith(github.event.comment.body, '/bot ') ||
+        startsWith(github.event.comment.body, format('/bot{0}', fromJSON('"\t"'))))) ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
     concurrency:
       group: prbot-review-writes
       queue: max
-    # A local Hermes gateway can serve the analysis-triggered review. Test completion
-    # events continue to refresh GitHub status even when that runner is offline.
-    runs-on: ${{ (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
+    # CI completion still refreshes GitHub status when the Hermes runner is offline.
+    runs-on: ${{ ((github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml') && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Mask local runner paths

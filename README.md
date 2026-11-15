@@ -155,6 +155,9 @@ Otherwise PRs stay "waiting for lint results".
 
 ## Commands (comment on the PR)
 
+Start the comment with a `/bot` command. Maintainers can also recheck a single PR from the
+`prereview` workflow's **Run workflow** button on the default branch.
+
 | Command | Who | Effect |
 | --- | --- | --- |
 | `/bot recheck` | anyone | Run the checks again |

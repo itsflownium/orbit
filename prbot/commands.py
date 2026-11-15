@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 _CMD = re.compile(r"^[ \t]*/bot[ \t]+(\w+)(?:[ \t]+([^\r\n]*))?\r?$", re.M)
 
-HELP = """**prbot commands**
+HELP = """**Orbit commands**
 
 - `/bot recheck` — run the checks again
 - `/bot fix` — request an automatic lint fix when the repository allows it
