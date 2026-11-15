@@ -176,6 +176,8 @@ class Tool:
         return re.search(self.enforce, _evidence(ws), re.M) is not None
 
     def parse(self, output: str, files: list[str], ws: str | None = None) -> list[Issue]:
+        if self.name == "eslint":
+            return _eslint_issues(output, files, ws)
         return parse_locations(output, files, ws)
 
     def check_cmd(self, files: list[str]) -> list[str]:
@@ -228,6 +230,32 @@ _PRETTIER_FILES = (".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prett
 _ESLINT_FILES = ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts",
                  ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json", ".eslintrc.yml", ".eslintrc.yaml")
 
+
+def _eslint_issues(output: str, files: list[str], ws: str | None) -> list[Issue]:
+    try:
+        rows, _ = json.JSONDecoder().raw_decode(output.lstrip())
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    wanted = set(files)
+    issues: list[Issue] = []
+    for row in rows:
+        path = row["filePath"]
+        if os.path.isabs(path) and ws:
+            path = os.path.relpath(path, ws)
+        if path not in wanted:
+            continue
+        for msg in row["messages"]:
+            if msg.get("severity") != 2:
+                continue
+            detail = msg["message"]
+            if msg.get("ruleId"):
+                detail = f"{msg['ruleId']} {detail}"
+            issues.append((path, msg.get("line"), detail))
+    return issues
+
+
 TOOLS: list[Tool] = [
     Tool("ruff", LINT, (".py", ".pyi"), _ruff_detect,
          enforce=r"ruff[-\s'\"]+check|ruff_runner|^\s*-?\s*id:\s*['\"]?ruff['\"]?\s*(?:#.*)?$|\bruff\s+\.|just\s+ruff|ruff-action",
@@ -258,19 +286,26 @@ TOOLS: list[Tool] = [
          lambda ws: _has_dep(ws, "eslint") and _exists(ws, *_ESLINT_FILES),
          enforce=r"eslint",
          argv=["npx", "--no-install", "eslint"],
-         check_args=lambda fs: ["--format", "unix", *fs],
+         check_args=lambda fs: ["--format", "json", *fs],
          fix_args=lambda fs: [["--fix", *fs]], safe_untrusted=False),
 ]
 
 
-def detect_tools(ws: str, wanted: str | list[str] = "auto", require_enforcement: bool = True) -> list[Tool]:
+def detect_tools(ws: str, wanted: str | list[str] = "auto", require_enforcement: bool = True,
+                 *, unavailable: list[Tool] | None = None) -> list[Tool]:
     """Tools to run in this checkout, already resolved to a runnable command."""
     if wanted != "auto":
         names = set(wanted)
         candidates = [t for t in TOOLS if t.name in names]
     else:
         candidates = [t for t in TOOLS if t.detect(ws) and (not require_enforcement or t.is_enforced(ws))]
-    resolved = [r for r in (t.resolve(ws) for t in candidates) if r is not None]
+    resolved = []
+    for tool in candidates:
+        ready = tool.resolve(ws)
+        if ready is not None:
+            resolved.append(ready)
+        elif unavailable is not None:
+            unavailable.append(tool)
     # Two formatters for the same files would fight; prefer the enforced/first one.
     if any(t.name == "ruff-format" for t in resolved):
         resolved = [t for t in resolved if t.name != "black"]
