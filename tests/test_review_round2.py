@@ -400,6 +400,32 @@ def test_hundreds_of_secrets_make_one_finding_and_a_comment_under_the_limit():
 
 # ------------------------------------------------------------------ transport and permissions (I5, I6, I11)
 
+@pytest.mark.parametrize("checks_token", [None, "workflow-token"])
+def test_checks_credential_only_reads_check_runs(monkeypatch, checks_token):
+    api = "https://api.github.example"
+    repo = "acme/widget"
+    client = GitHub(token="review-token", api_url=api, checks_token=checks_token)
+    checks_url = f"{api}/repos/{repo}/commits/sha/check-runs"
+    checks_auth = f"Bearer {checks_token or 'review-token'}"
+    requests = iter([
+        ("GET", f"{checks_url}?per_page=100", checks_auth, {"check_runs": [{"id": 1}]},
+         f'<{checks_url}?page=2>; rel="next"'),
+        ("GET", f"{checks_url}?page=2", checks_auth, {"check_runs": [{"id": 2}]}, ""),
+        ("POST", f"{api}/repos/{repo}/pulls/1/reviews", "Bearer review-token", {"id": 3}, ""),
+    ])
+
+    def open_(req, timeout):
+        method, url, auth, payload, link = next(requests)
+        assert (req.get_method(), req.full_url, req.get_header("Authorization")) == (method, url, auth)
+        response = io.BytesIO(json.dumps(payload).encode())
+        response.headers = {"Link": link}
+        return response
+
+    monkeypatch.setattr(ghmod._OPENER, "open", open_)
+    assert client.check_runs(repo, "sha") == [{"id": 1}, {"id": 2}]
+    assert client.create_review(repo, 1, "sha", []) == {"id": 3}
+
+
 def test_dropped_connection_is_retried_for_reads(monkeypatch):
     calls = {"n": 0}
 
