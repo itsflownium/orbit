@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .count_examples import verify_range_count
 from .diffutil import added_lines, glob_match, head_lines, patch_lines
 from .github import SSL_CONTEXT, GitHubError
 from .models import Finding
@@ -97,6 +98,8 @@ Each finding must reference a line that appears with a leading '+' in the diff. 
 added lines from the new-file number in the hunk header to get the exact line. Give a specific title. \
 In `explanation`, describe the input or situation that triggers the bug and what the caller sees. \
 In `recommendation`, explain the concrete code change and how to check the result. Keep both concise. \
+For an example with a numeric result, trace the current code on each input before giving an exact value. \
+If you cannot derive it, explain which inputs are affected without guessing a number. \
 Use `references` to point to the relevant callers, definitions, or nearby code that the change may \
 break. Cite exact paths and line ranges from the diff or numbered code context. Use an empty list \
 when no other source lines support the finding. \
@@ -524,6 +527,15 @@ def validate_review(data: dict, pr, files, rc: dict, visible: dict[str, dict[int
         explanation = item.get("explanation") if isinstance(item.get("explanation"), str) else ""
         recommendation = item.get("recommendation")
         recommendation = recommendation.strip()[:1000] if isinstance(recommendation, str) else ""
+        if kind == "bug" and replacement and path.endswith(".py"):
+            example = verify_range_count(visible.get(path, {}), line, code, replacement, pr.body or "")
+            if example is not None:
+                title = f"Strict comparison excludes values equal to {example.excluded}"
+                explanation = (f"For `{example.call}`, the current comparison counts **{example.actual}**. "
+                               f"Including both bounds counts **{example.expected}**.")
+                recommendation = ("Use `<=` at both ends of the comparison. Test values equal to each bound, "
+                                  "including repeated values.")
+                replacement = example.replacement
         # stable key: path + kind + the code on that line, so disputes and inline de-duplication
         # survive re-reviews that reword the title or shift line numbers
         title = " ".join(title.split())
