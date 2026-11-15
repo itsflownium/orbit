@@ -1,14 +1,14 @@
 # Verification and open work
 
-## Verified in itsflownium/prbot
+## Verified in itsflownium/orbit
 
 - GitHub Actions ran the analysis job on ten same-repository test PRs. The original
   template's token received a 403 from the pull-request API on the private repo.
   Adding `pull-requests: read` let the job fetch PR data and upload artifacts.
-- PRbot downloaded the real artifacts, set commit statuses and labels, and
+- Orbit downloaded the real artifacts, set commit statuses and labels, and
   created or updated GitHub comments from a local review runner.
 - Hermes Agent served `deepseek/deepseek-v4.1-flash` through Nous Portal.
-  PRbot posted review findings and author-facing instructions in comment mode.
+  Orbit posted review findings and author-facing instructions in comment mode.
 - In commit mode a test fix removed one unused import from a test branch. The
   new commit triggered GitHub Actions. The default workflow token resolved to
   `github-actions[bot]` in the analysis job.

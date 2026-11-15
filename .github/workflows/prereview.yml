@@ -37,8 +37,23 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Create Orbit installation token
+        if: vars.PRBOT_APP_ID != ''
+        id: orbit-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ vars.PRBOT_APP_ID }}
+          private-key: ${{ secrets.PRBOT_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+          permission-statuses: write
       - uses: ./
         with:
+          github-token: ${{ steps.orbit-token.outputs.token || github.token }}
+          bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
           llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}

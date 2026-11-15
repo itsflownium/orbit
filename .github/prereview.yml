@@ -1,6 +1,9 @@
 autofix:
   mode: comment
 
+comments:
+  tag_author: true
+
 checks:
   llm_review:
     only_when_clean: false
@@ -9,4 +12,5 @@ checks:
       - prbot/config.py
 
 llm:
+  provider: hermes
   review_model: deepseek/deepseek-v4.1-flash
