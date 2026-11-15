@@ -1,0 +1,33 @@
+# Example .github/prereview.yml. Every key is optional; anything left out uses the
+# built-in default (run `prbot config` to print them all). Read from the base branch only.
+
+checks:
+  tests:
+    severity: blocking          # require tests for code changes...
+    required_paths: ["src/**"]  # ...but only under src/
+  description:
+    require_linked_issue: true
+  size:
+    max_lines: 600
+  llm_review:
+    severity: advisory          # flip to blocking once the team trusts it
+    min_confidence: 0.8
+
+execution: same-repo            # never | same-repo | always
+
+autofix:
+  mode: commit                  # commit | suggest | off
+
+llm:
+  provider: hermes
+  # Names your server exposes. These defaults match vLLM/SGLang serving the HF repos.
+  small_model: NousResearch/Hermes-4-14B
+  review_model: NousResearch/Hermes-4-70B
+  max_reviews_per_run: 30
+
+comments:
+  max_inline: 5
+  stale_days: 21
+
+ignore_paths:
+  - "docs/generated/**"

@@ -1,0 +1,122 @@
+name: prbot pre-review
+description: Cheap automated pre-review for pull requests. Comments on issues or fixes them so maintainers only review clean PRs.
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  mode:
+    description: >
+      "review" (privileged: comments, labels, statuses; never runs PR code) or
+      "analyze" (unprivileged: runs the repo's linters on the PR and uploads the results;
+      use only in a pull_request job with read-only permissions and no secrets).
+    default: review
+  github-token:
+    description: Token for reading the repo and, in review mode, posting comments, labels and statuses.
+    default: ${{ github.token }}
+  push-token:
+    description: >
+      Review mode only. Optional GitHub App or fine-grained token with contents:write. Needed to
+      push fix commits (pushes with the default token do not trigger CI). Without it, fixes are
+      posted as suggestions.
+    default: ""
+  bot-login:
+    description: >
+      Review mode only. The login the bot posts as, e.g. "my-app[bot]" when github-token is a GitHub
+      App token. The bot only trusts summary comments by this login. Defaults to the token's own
+      login (github-actions[bot] for the default token).
+    default: ""
+  llm-base-url:
+    description: Review mode only. OpenAI-compatible endpoint serving a Hermes model, e.g. http://my-vllm:8000/v1.
+    default: ""
+  llm-api-key:
+    description: Review mode only. API key for the LLM endpoint, if it needs one.
+    default: ""
+  pr-number:
+    description: Analyze mode only. PR number (defaults to the triggering pull_request).
+    default: ${{ github.event.pull_request.number }}
+  workspace:
+    description: Path of a checkout of the base branch.
+    default: ${{ github.workspace }}
+  tools:
+    description: Analyze mode only. Extra pip packages for linting (uv lets the bot run the repo's pinned versions).
+    default: "uv"
+  dry-run:
+    description: Review mode only. Read only; print what the bot would post.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install prbot
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MODE: ${{ inputs.mode }}
+        TOOLS: ${{ inputs.tools }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        python -m pip install --quiet "$ACTION_PATH"
+        if [ "$MODE" = "analyze" ]; then
+          if [ -n "$TOOLS" ]; then
+            read -r -a extra <<< "$TOOLS"
+            python -m pip install --quiet "${extra[@]}"
+          fi
+          # pins are read from the base checkout, never from the PR
+          read -r -a pins <<< "$(prbot --workspace "$WORKSPACE" pins)"
+          if [ "${#pins[@]}" -gt 0 ]; then python -m pip install --quiet "${pins[@]}"; fi
+        fi
+
+    # ---------------------------------------------------------------- analyze mode
+    - name: Fetch PR data (read-only token)
+      if: inputs.mode == 'analyze'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr-number }}
+        WORKSPACE: ${{ inputs.workspace }}
+        OUT: ${{ runner.temp }}/pr.json
+      run: prbot --workspace "$WORKSPACE" prepare "$REPO" "$PR" --out "$OUT"
+
+    - name: Run the repo's linters on the PR (no token)
+      if: inputs.mode == 'analyze'
+      shell: bash
+      env:
+        WORKSPACE: ${{ inputs.workspace }}
+        IN: ${{ runner.temp }}/pr.json
+        OUT: ${{ runner.temp }}/prbot-analysis/analysis.json
+      run: |
+        mkdir -p "$(dirname "$OUT")"
+        env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_CACHE_URL -u ACTIONS_RESULTS_URL \
+          prbot --workspace "$WORKSPACE" analyze --pr-json "$IN" --out "$OUT"
+
+    - name: Upload analysis
+      if: inputs.mode == 'analyze'
+      uses: actions/upload-artifact@v4
+      with:
+        name: prbot-analysis
+        path: ${{ runner.temp }}/prbot-analysis/analysis.json
+        retention-days: 7
+
+    # ---------------------------------------------------------------- review mode
+    - name: Run prbot
+      if: inputs.mode != 'analyze'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRBOT_PUSH_TOKEN: ${{ inputs.push-token }}
+        PRBOT_LOGIN: ${{ inputs.bot-login }}
+        PRBOT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        PRBOT_LLM_API_KEY: ${{ inputs.llm-api-key }}
+        WORKSPACE: ${{ inputs.workspace }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        flags=()
+        if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+        prbot "${flags[@]}" --workspace "$WORKSPACE" event

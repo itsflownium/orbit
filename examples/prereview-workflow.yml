@@ -1,0 +1,59 @@
+# Copy to .github/workflows/prereview.yml
+#
+# PRIVILEGED job: comments, labels, statuses, optional fix commits. It NEVER runs PR code:
+# lint results come from the prereview-analyze workflow's artifact and are treated as
+# untrusted data. Always runs the workflow file from the default branch.
+name: prereview
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  issue_comment:
+    types: [created]
+  # Re-review when CI or the analysis job finishes (results changed on the same commit).
+  workflow_run:
+    workflows: ["CI", "prereview-analyze"]
+    types: [completed]
+  # Backlog sweep: re-checks changed PRs and marks stale ones.
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review (empty = sweep all open PRs)
+        required: false
+      limit:
+        description: Max PRs to sweep
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+  checks: read
+  actions: read
+
+jobs:
+  prereview:
+    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/bot'))
+    # Job-level, so ordinary comments (filtered out by `if` above) never join the queue and
+    # cancel a pending run. GitHub keeps one pending run per group; a cancelled run loses nothing,
+    # because every run applies all /bot commands posted since the last one it saw.
+    concurrency:
+      group: prereview-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_sha || 'sweep' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Base branch only. Used to commit fixes (git apply + push); no PR code is executed.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: YOUR-ORG/prbot@main  # wherever you host this action
+        with:
+          push-token: ${{ secrets.PRBOT_PUSH_TOKEN }}
+          # bot-login: my-app[bot]   # set this when github-token is a GitHub App token
+          llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
+          llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}
