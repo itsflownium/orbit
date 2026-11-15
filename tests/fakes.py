@@ -60,11 +60,20 @@ class FakeGitHub:
         data = copy.deepcopy(self.prs[number])
         data["labels"] = [{"name": n} for n in sorted(self.labels.get(number, set()))]
         pr = PullRequest.from_api(data)
-        pr.files = list(self.files.get(number, []))
+        if with_files:
+            pr.files = self.get_pr_files(repo, number)
         return pr
 
-    def list_open_prs(self, repo, limit=None):
-        return [self.prs[n] for n in sorted(self.prs)][:limit]
+    def get_pr_files(self, repo, number):
+        return list(self.files.get(number, []))
+
+    def list_open_prs(self, repo, limit=None, *, head=None):
+        prs = [self.prs[n] for n in sorted(self.prs)]
+        if head:
+            owner, branch = head.split(":", 1)
+            prs = [pr for pr in prs if pr["head"].get("ref") == branch
+                   and ((pr["head"].get("repo") or {}).get("full_name") or "").split("/", 1)[0] == owner]
+        return prs[:limit]
 
     def get_file_text(self, repo, path, ref):
         return self.repo_files.get(path)

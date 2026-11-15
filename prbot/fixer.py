@@ -7,6 +7,7 @@
                 GitHub App or fine-grained token) so the push triggers CI; fork PRs also need
                 "Allow edits by maintainers".
       suggest - posted as GitHub suggestion blocks the author applies in one click.
+      comment - reports the finding and leaves the branch for the author to update.
     If commit is not possible, the bot falls back to suggest.
 """
 
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 
 from . import patches
 from .checks import Context
+from .config import autofix_mode
 from .diffutil import commentable_lines
 from .models import ADVISORY, Finding
 from .workspace import Workspace
@@ -40,24 +42,28 @@ def push_token() -> str | None:
 def can_push(ctx: Context) -> bool:
     if not push_token() or not ctx.pr.head_repo:
         return False
+    head = (ctx.pr.raw.get("head") or {}).get("repo") or {}
+    if ctx.pr.head_ref == head.get("default_branch"):
+        return False
     return not ctx.pr.is_fork or ctx.pr.maintainer_can_modify
 
 
 def apply_fixes(ctx: Context, findings: list[Finding], state: dict, force_commit: bool = False) -> FixResult:
     res = FixResult()
     af = ctx.cfg["autofix"]
-    if not af.get("enabled") or af.get("mode") == "off":
+    configured_mode = autofix_mode(ctx.cfg)
+    if configured_mode == "comment":
         return res
     keys = {f.key for f in findings}
-    mode = "commit" if force_commit else af.get("mode", "suggest")
+    mode = "commit" if force_commit else configured_mode
 
     # 1. Branch behind base with no conflicts: GitHub can merge base in for us.
-    if "mergeable-behind" in keys and af.get("update_branch") and can_push(ctx) and not ctx.gh.dry_run:
+    if mode == "commit" and "mergeable-behind" in keys and af.get("update_branch") and can_push(ctx) \
+            and not ctx.gh.dry_run:
         from .github import GitHub
         if GitHub(token=push_token()).update_branch(ctx.pr.repo, ctx.pr.number, ctx.pr.head_sha):
             res.pushed = True
-            res.resolved.add("mergeable-behind")
-            res.notes.append(f"Merged the latest `{ctx.pr.base_ref}` into this branch.")
+            res.notes.append(f"Requested an update from `{ctx.pr.base_ref}`.")
             return res
 
     # 2. Lint/format fixes produced by the analysis job.
@@ -76,22 +82,26 @@ def apply_fixes(ctx: Context, findings: list[Finding], state: dict, force_commit
 
     if mode == "commit" and can_push(ctx) and not ctx.gh.dry_run and ctx.workspace:
         ws = Workspace(ctx.workspace, token=ctx.gh.token)
-        restore = ws.head()
+        restore = ws.current_ref()
         keep = ws.untracked()
         paths = {fp.path for fp in fps}
-        try:
-            if ws.checkout_pr(ctx.pr) and ws.apply(patches.render(fps), allowed=paths):
-                msg = f"{af['commit_message']}\n\nApplied: {', '.join(tool_names)}"
-                if ws.commit_and_push(ctx.pr, sorted(paths), msg, push_token()):
-                    res.pushed = True
-                    res.resolved |= lint_keys
-                    res.notes.append(f"Pushed a commit applying {', '.join(f'`{t}`' for t in tool_names)} "
-                                     f"to {len(fps)} file(s), on lines this PR added.")
-                    return res
-        finally:
-            ws.reset(keep_untracked=keep)  # nothing a patch planted survives into later work
-            ws.checkout(restore)
-        res.notes.append("Could not push fixes to this branch; posting them as suggestions instead.")
+        status = ws.git("status", "--porcelain", "--untracked-files=no")
+        if status.code or status.out.strip() or ws.has_credentials():
+            res.notes.append("Use a clean checkout with persisted credentials disabled to commit fixes.")
+        elif ws.checkout_pr(ctx.pr):
+            try:
+                if ws.apply(patches.render(fps), allowed=paths):
+                    msg = f"{af['commit_message']}\n\nApplied: {', '.join(tool_names)}"
+                    if ws.commit_and_push(ctx.pr, sorted(paths), msg, push_token()):
+                        res.pushed = True
+                        res.resolved |= lint_keys
+                        res.notes.append(f"Pushed a commit applying {', '.join(f'`{t}`' for t in tool_names)} "
+                                         f"to {len(fps)} file(s), on lines this PR added.")
+                        return res
+            finally:
+                ws.reset(keep_untracked=keep)
+                ws.checkout(restore, detach=False)
+        res.notes.append("Posting available fixes as suggestions.")
     elif mode == "commit" and not ctx.gh.dry_run:
         if ctx.pr.is_fork and not ctx.pr.maintainer_can_modify:
             why = "the fork does not allow maintainer edits"

@@ -10,12 +10,12 @@ MAINTAINER_PERMISSIONS = {"admin", "maintain", "write"}
 
 log = logging.getLogger(__name__)
 
-_CMD = re.compile(r"^\s*/bot\s+(\w+)(?:\s+(.*))?$", re.M)
+_CMD = re.compile(r"^[ \t]*/bot[ \t]+(\w+)(?:[ \t]+([^\r\n]*))?\r?$", re.M)
 
 HELP = """**prbot commands**
 
 - `/bot recheck` — run the checks again
-- `/bot fix` — apply automatic fixes (formatters/linters, update branch)
+- `/bot fix` — request an automatic lint fix when the repository allows it
 - `/bot dispute <key> <reason>` — mark a finding as wrong; it stops blocking and a maintainer decides
 - `/bot help` — this message
 

@@ -7,6 +7,7 @@ import json
 import logging
 import re
 
+from .config import autofix_mode
 from .github import GitHubError
 from .models import Finding, PullRequest
 
@@ -73,6 +74,7 @@ def find_summary(gh, pr: PullRequest) -> tuple[int | None, dict]:
 
 
 _MENTION = re.compile(r"@(?=[A-Za-z0-9])")
+_SUGGESTION_FENCE = re.compile(r"([`~]{3,}[ \t]*)suggestion\b", re.I)
 
 
 def clean(text: str | None) -> str:
@@ -81,6 +83,7 @@ def clean(text: str | None) -> str:
     if not text:
         return ""
     text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+    text = _SUGGESTION_FENCE.sub(r"\1text", text)
     return _MENTION.sub("@\u200b", text)
 
 
@@ -89,17 +92,30 @@ def _fence(text: str) -> str:
     return "`" * max(3, longest + 1)
 
 
-def inline_body(f: Finding) -> str:
+def _details(f: Finding) -> str:
+    explanation = clean(f.detail)
+    if not f.recommendation:
+        return explanation
+    repair = "**How to fix**\n\n" + clean(f.recommendation)
+    return f"{explanation}\n\n{repair}" if explanation else repair
+
+
+def inline_body(f: Finding, *, allow_suggestions: bool = True) -> str:
     parts = [f"**{clean(f.title)}**"]
-    if f.detail:
-        parts.append(clean(f.detail))
-    if f.suggestion is not None:
+    details = _details(f)
+    if details:
+        parts.append(details)
+    if f.suggestion is not None and allow_suggestions:
         fence = _fence(f.suggestion)
         # an empty suggestion block deletes the selected lines; "\n\n" would leave a blank line
         inner = f"{f.suggestion}\n" if f.suggestion else ""
         parts.append(f"{fence}suggestion\n{inner}{fence}")
+    elif f.suggestion:
+        example = clean(f.suggestion)
+        fence = _fence(example)
+        parts.append(f"**Example replacement**\n\n{fence}\n{example}\n{fence}")
     if f.check != "autofix":
-        parts.append("<sub>prbot · reply `/bot dispute " + (f.key or "") + " <reason>` if this is wrong</sub>")
+        parts.append("<sub>prbot · reply `/bot dispute " + _key(f.key) + " <reason>` if this is wrong</sub>")
     return "\n\n".join(parts)
 
 
@@ -107,9 +123,10 @@ def _item(f: Finding, checked: bool = False, compact: bool = False) -> str:
     box = "[x]" if checked else "[ ]"
     where = f" — `{f.path}`" + (f" line {f.line}" if f.line else "") if f.path and f.check != "lint" else ""
     head = f"- {box} {clean(f.title)}{clean(where)} <sub>`{_key(f.key)}`</sub>"
-    if f.detail and not checked and not compact:
-        detail = "\n".join("  " + ln if ln else "" for ln in clean(f.detail).split("\n"))
-        head += f"\n  <details><summary>How to fix</summary>\n\n{detail}\n\n  </details>"
+    details = _details(f)
+    if details and not checked and not compact:
+        detail = "\n".join("  " + ln if ln else "" for ln in details.split("\n"))
+        head += f"\n  <details><summary>Details</summary>\n\n{detail}\n\n  </details>"
     return head
 
 
@@ -125,7 +142,7 @@ def _key(key: str | None) -> str:
 def render(pr: PullRequest, findings: list[Finding], notes: list[str], state: dict, cfg: dict,
            fixed: list[str] | None = None, triage: dict | None = None) -> str:
     for compact in (False, True):
-        body = _render(pr, findings, notes, state, fixed, triage, compact)
+        body = _render(pr, findings, notes, state, cfg, fixed, triage, compact)
         if len(body) <= MAX_BODY:
             return body
     # still too long: keep the head and the state block (the state must always survive)
@@ -133,12 +150,13 @@ def render(pr: PullRequest, findings: list[Finding], notes: list[str], state: di
     return body[: MAX_BODY - len(tail) - 200] + "\n\n_(truncated: too many findings to list)_\n" + tail
 
 
-def _render(pr, findings, notes, state, fixed, triage, compact) -> str:
+def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
     disputes = state.get("disputes", {})
     blocking = [f for f in findings if f.blocking]
     advisory = [f for f in findings if not f.blocking and f.key not in disputes and f.check != "autofix"]
     disputed = [f for f in findings if f.key in disputes]
-    suggestions = [f for f in findings if f.check == "autofix"]
+    posted_inline = set(state.get("posted_inline", []))
+    suggestions = [f for f in findings if f.check == "autofix" and f.key in posted_inline]
     override = state.get("ready_override")
 
     def items(fs):
@@ -151,18 +169,18 @@ def _render(pr, findings, notes, state, fixed, triage, compact) -> str:
     if state.get("paused"):
         out.append("### Pre-review paused\n\nA maintainer paused automated review on this PR. "
                    "A maintainer can comment `/bot resume` to turn it back on.")
+    elif state.get("fix_pending"):
+        out.append("### Pre-review: fix submitted\n\nThis PR will be checked again after the branch updates.")
     elif blocking and not override:
         n = len(blocking)
         out.append(f"### Pre-review: {n} item{'s' if n != 1 else ''} to fix before maintainer review\n")
-        out.append(f"Thanks for the PR, @{pr.author}! An automated pre-review found the issues below. "
-                   "Fixing them gets this PR into the maintainers' review queue faster. "
-                   "This comment updates itself every time you push.")
+        out.append("Address the blocking findings below and push an update to rerun pre-review.")
         out.append("\n**Must fix**\n")
         out.extend(items(blocking))
     elif override:
         out.append("### Pre-review passed\n")
         out.append("A maintainer marked this PR ready.")
-    elif disputed and any(f.check != "autofix" for f in disputed):
+    elif state.get("dispute_pending"):
         out.append("### Pre-review: waiting for a maintainer\n")
         out.append("The remaining findings are disputed. A maintainer decides with `/bot resolve <key>` "
                    "(accept the dispute) or `/bot ready`.")
@@ -170,6 +188,12 @@ def _render(pr, findings, notes, state, fixed, triage, compact) -> str:
         out.append("### Pre-review: waiting for lint results\n")
         out.append("No blocking issues so far. The lint analysis for this commit has not reported yet; "
                    "this comment updates when it does.")
+    elif state.get("pending_checks"):
+        out.append("### Pre-review: waiting for required checks\n\n"
+                   "See the checks and run details for the latest status.")
+    elif state.get("llm_pending") and not state.get("ready"):
+        out.append("### Pre-review: waiting for model review\n\n"
+                   "The bot will retry on the next review run.")
     else:
         out.append("### Pre-review passed\n")
         out.append("No blocking issues found. This PR is in the maintainers' review queue.")
@@ -180,7 +204,7 @@ def _render(pr, findings, notes, state, fixed, triage, compact) -> str:
         out.append(f"\n**Suggested fixes:** {len(suggestions)} inline suggestion(s) posted; "
                    "apply them with *Commit suggestion* in the Files tab.")
     if advisory:
-        out.append("\n**Suggestions** (not blocking)\n")
+        out.append("\n**Advisory findings**\n")
         out.extend(items(advisory))
     if disputed:
         out.append("\n**Disputed** (a maintainer will decide)\n")
@@ -192,10 +216,12 @@ def _render(pr, findings, notes, state, fixed, triage, compact) -> str:
     if notes and not compact:
         out.append("\n<details><summary>Run details</summary>\n\n"
                    + "\n".join(f"- {clean(n)}" for n in notes[:30]) + "\n\n</details>")
+    fix_command = ("- `/bot fix` — ask the bot to apply available lint fixes\n"
+                   if autofix_mode(cfg) != "comment" else "")
     out.append(
         "\n<details><summary>Commands</summary>\n\n"
         "- `/bot recheck` — run the checks again\n"
-        "- `/bot fix` — let the bot apply automatic fixes\n"
+        f"{fix_command}"
         "- `/bot dispute <key> <reason>` — flag a finding as wrong; a maintainer decides\n"
         "- Maintainers: `/bot ready`, `/bot resolve <key>`, `/bot pause`, `/bot resume`, `/bot ignore <check>`\n\n"
         "</details>"
@@ -230,14 +256,16 @@ def sync_labels(gh, pr: PullRequest, cfg: dict, wanted: set[str], shared: dict,
         gh.remove_label(pr.repo, pr.number, lbl)
 
 
-def post_inline(gh, pr: PullRequest, findings: list[Finding], state: dict, limit: int) -> int:
+def post_inline(gh, pr: PullRequest, findings: list[Finding], state: dict, limit: int,
+                *, allow_suggestions: bool = True) -> int:
     posted = set(state.get("posted_inline", []))
     todo = [f for f in findings if f.path and f.line and f.key not in posted][:limit]
     if not todo:
         return 0
 
     def payload(f: Finding) -> dict:
-        c = {"path": f.path, "line": f.line, "side": "RIGHT", "body": inline_body(f)}
+        c = {"path": f.path, "line": f.line, "side": "RIGHT",
+             "body": inline_body(f, allow_suggestions=allow_suggestions)}
         if f.start_line and f.start_line < f.line:
             c["start_line"], c["start_side"] = f.start_line, "RIGHT"
         return c
