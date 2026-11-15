@@ -107,6 +107,7 @@ DEFAULTS: dict[str, Any] = {
             "min_confidence": 0.75,
             "max_findings": 5,
             "max_diff_chars": 60000,
+            "context_paths": [],  # additional exact repository paths to inspect for related code
         },
     },
     # When to run repo tools (linters, formatters) against PR code.

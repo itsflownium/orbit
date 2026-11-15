@@ -185,3 +185,14 @@ def test_model_review_waits_for_blocking_issues(hermes_server):
     assert "runs after the blocking issues are fixed" in gh.summary(1)
 
 
+def test_model_review_waits_for_pending_required_ci(hermes_server):
+    gh = make_gh()
+    sha = gh.get_pr("acme/widget", 1).head_sha
+    gh.check_runs_by_sha[sha] = [{"name": "test", "status": "in_progress"}]
+    assert review_pr(gh, "acme/widget", 1)["status"] == "pending"
+    assert not hermes_server.calls
+    gh.check_runs_by_sha[sha][0].update(status="completed", conclusion="success")
+    assert review_pr(gh, "acme/widget", 1)["status"] == "success"
+    assert hermes_server.calls
+
+
