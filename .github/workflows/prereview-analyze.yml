@@ -1,0 +1,43 @@
+# Copy to .github/workflows/prereview-analyze.yml
+#
+# UNPRIVILEGED job: runs the repo's own linters/formatters on the PR's code.
+# `pull_request` gives fork PRs a read-only token and no secrets, so nothing here can be
+# abused even if the PR contains malicious code or tool configs. Its only output is an
+# artifact the privileged workflow (prereview.yml) reads as untrusted data.
+name: prereview-analyze
+
+on:
+  pull_request:
+    branches: ['prbot-smoke-261115-base']
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prereview-analyze-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    # GitHub-hosted runners only: PR code runs here, and a self-hosted runner would keep whatever it leaves behind.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Base branch: tool detection, enforcement and version pins are read from here.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: ./
+        with:
+          mode: analyze
+          tools: 'uv ruff'
+
+      - name: Verify workflow token actor
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -c 'from prbot.github import GitHub; print("Workflow token login:", GitHub().login())'
