@@ -4,6 +4,14 @@ on:
   workflow_run:
     workflows: [prereview-analyze, test]
     types: [completed]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to recheck
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -16,15 +24,19 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
-       github.event.workflow_run.path == '.github/workflows/test.yml')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
+       (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
+        github.event.workflow_run.path == '.github/workflows/test.yml')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       github.event.issue.state == 'open' && github.event.comment.user.type != 'Bot' &&
+       (startsWith(github.event.comment.body, '/bot ') ||
+        startsWith(github.event.comment.body, format('/bot{0}', fromJSON('"\t"'))))) ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
     concurrency:
       group: prbot-review-writes
       queue: max
-    # A local Hermes gateway can serve the analysis-triggered review. Test completion
-    # events continue to refresh GitHub status even when that runner is offline.
-    runs-on: ${{ (github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
+    # CI completion still refreshes GitHub status when the Hermes runner is offline.
+    runs-on: ${{ ((github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml') && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Mask local runner paths
@@ -37,8 +49,27 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Validate review identity
+        shell: bash
+        env:
+          REVIEW_IDENTITY: ${{ vars.PRBOT_REVIEW_IDENTITY }}
+          USER_REVIEW_TOKEN: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN || '' }}
+        run: |
+          case "$REVIEW_IDENTITY" in
+            ''|bot) ;;
+            user)
+              if [ -z "$USER_REVIEW_TOKEN" ]; then
+                echo '::error::User review mode requires the PRBOT_USER_REVIEW_TOKEN secret.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::PRBOT_REVIEW_IDENTITY must be bot or user.'
+              exit 1
+              ;;
+          esac
       - name: Create Orbit installation token
-        if: vars.PRBOT_APP_ID != ''
+        if: vars.PRBOT_REVIEW_IDENTITY != 'user' && vars.PRBOT_APP_ID != ''
         id: orbit-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
@@ -52,7 +83,7 @@ jobs:
           permission-statuses: write
       - uses: ./
         with:
-          github-token: ${{ steps.orbit-token.outputs.token || github.token }}
+          github-token: ${{ (vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN) || steps.orbit-token.outputs.token || github.token }}
           bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
