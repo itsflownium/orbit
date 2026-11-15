@@ -14,6 +14,9 @@ inputs:
   github-token:
     description: Token for reading the repo and, in review mode, posting comments, labels and statuses.
     default: ${{ github.token }}
+  checks-token:
+    description: Review mode only. Optional token with Checks read access, used only to read check runs.
+    default: ""
   push-token:
     description: >
       Review mode only. Optional GitHub App or fine-grained token with contents:write. Needed to
@@ -111,6 +114,7 @@ runs:
         mkdir -p "$(dirname "$OUT")"
         env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
             -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_CACHE_URL -u ACTIONS_RESULTS_URL \
+            -u PRBOT_CHECKS_TOKEN \
           prbot --workspace "$WORKSPACE" analyze --pr-json "$IN" --out "$OUT"
 
     - name: Upload analysis
@@ -127,6 +131,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRBOT_CHECKS_TOKEN: ${{ inputs.checks-token }}
         PRBOT_PUSH_TOKEN: ${{ inputs.push-token }}
         PRBOT_LOGIN: ${{ inputs.bot-login }}
         LLM_BASE_URL_INPUT: ${{ inputs.llm-base-url }}

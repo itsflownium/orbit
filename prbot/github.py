@@ -84,12 +84,14 @@ class GitHubError(RuntimeError):
 
 
 class GitHub:
-    def __init__(self, token: str | None = None, api_url: str | None = None, dry_run: bool = False):
+    def __init__(self, token: str | None = None, api_url: str | None = None, dry_run: bool = False,
+                 *, checks_token: str | None = None):
         self.token = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         self.api = (api_url or os.environ.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
         self.dry_run = dry_run
         self.writes: list[tuple[str, str, Any]] = []  # recorded writes in dry-run mode
         self._login: str | None = None
+        self._checks = GitHub(token=checks_token, api_url=self.api, dry_run=dry_run) if checks_token else None
 
     # ------------------------------------------------------------------ transport
     def graphql(self, query: str, variables: dict) -> dict:
@@ -242,7 +244,9 @@ class GitHub:
         return None
 
     def check_runs(self, repo: str, sha: str) -> list[dict]:
-        return list(self.paginate(f"/repos/{repo}/commits/{sha}/check-runs"))
+        # GitHub does not let a fine-grained personal token opt into Checks access.
+        client = self._checks or self
+        return list(client.paginate(f"/repos/{repo}/commits/{sha}/check-runs"))
 
     def combined_status(self, repo: str, sha: str) -> dict:
         data = self.request("GET", f"/repos/{repo}/commits/{sha}/status", params={"per_page": 100})

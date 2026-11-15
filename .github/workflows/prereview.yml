@@ -84,6 +84,7 @@ jobs:
       - uses: ./
         with:
           github-token: ${{ (vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN) || steps.orbit-token.outputs.token || github.token }}
+          checks-token: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && github.token || '' }}
           bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
