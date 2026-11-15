@@ -1,4 +1,3 @@
-import json
 
 
 def mean_record_size(sizes):
