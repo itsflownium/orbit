@@ -1,0 +1,22 @@
+name: prereview-catch-up
+
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+
+jobs:
+  catch-up:
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
+    # Use the normal review writer and its queue, runner selection, and posting identity.
+    uses: ./.github/workflows/prereview.yml
+    secrets:
+      PRBOT_USER_REVIEW_TOKEN: ${{ secrets.PRBOT_USER_REVIEW_TOKEN }}
+      PRBOT_APP_PRIVATE_KEY: ${{ secrets.PRBOT_APP_PRIVATE_KEY }}
+      PRBOT_LLM_BASE_URL: ${{ secrets.PRBOT_LLM_BASE_URL }}
+      PRBOT_LLM_API_KEY: ${{ secrets.PRBOT_LLM_API_KEY }}
