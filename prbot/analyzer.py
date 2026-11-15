@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +45,10 @@ MAX_PATCH_BYTES = 1_000_000
 
 
 class WorkspaceDirty(RuntimeError):
+    pass
+
+
+class AnalysisFailed(RuntimeError):
     pass
 
 
@@ -106,12 +111,17 @@ def _files_for(tool: Tool, ctx: _Ctx) -> list[str]:
 
 def _fixer_patches(ctx: _Ctx, tools: list[Tool], keep: set[str]) -> list[patches.FilePatch]:
     ws = Workspace(ctx.workspace)
-    for tool in tools:
-        files = _files_for(tool, ctx)
-        for cmd in tool.fix_cmds(files) if files else []:
-            run(cmd, ctx.workspace, timeout=300)
-    diff = ws.diff([f.filename for f in ctx.files])
-    ws.reset(keep_untracked=keep)
+    try:
+        for tool in tools:
+            files = _files_for(tool, ctx)
+            for cmd in tool.fix_cmds(files) if files else []:
+                result = run(cmd, ctx.workspace, timeout=300)
+                accepted = (0, 1) if tool.kind == LINT else (0,)
+                if result.code not in accepted:
+                    raise AnalysisFailed(f"{tool.name} could not apply fixes (exit {result.code}).")
+        diff = ws.diff([f.filename for f in ctx.files])
+    finally:
+        ws.reset(keep_untracked=keep)
     return patches.keep_author_hunks(diff, ctx.author_lines())
 
 
@@ -131,11 +141,12 @@ def _lint(ctx: _Ctx, tools: list[Tool], keep: set[str], severity: str) -> tuple[
             Workspace(ctx.workspace).reset(keep_untracked=keep)
             if result.code == 0:
                 continue
-            issues = [(p, ln, msg) for p, ln, msg in tool.parse(result.out, files, ctx.workspace)
+            diagnostics = tool.parse(result.out, files, ctx.workspace)
+            if result.code != 1 or not diagnostics:
+                raise AnalysisFailed(f"{tool.name} could not complete the lint check (exit {result.code}).")
+            issues = [(p, ln, msg) for p, ln, msg in diagnostics
                       if (ln in mine.get(p, set())) or (ln is None and p in added_files)]
             if not issues:
-                if result.code in (124, 127):
-                    ctx.notes.append(f"`{tool.name}` could not run: {result.out.strip()[:200]}")
                 continue
         else:
             fps = _fixer_patches(ctx, [tool], keep)
@@ -147,7 +158,7 @@ def _lint(ctx: _Ctx, tools: list[Tool], keep: set[str], severity: str) -> tuple[
         more = f"\n- ...and {len(issues) - 20} more" if len(issues) > 20 else ""
         nfiles = len({p for p, _, _ in issues})
         what = "issue(s)" if tool.kind == LINT else "unformatted change(s)"
-        cmd = " ".join(tool.fix_cmds(["<files>"])[0])
+        cmd = "\n".join(shlex.join(argv) for argv in tool.fix_cmds(sorted({p for p, _, _ in issues})[:20]))
         out.append(Finding(
             check="lint", severity=severity if tool.exact_version else ADVISORY, key=f"lint-{tool.name}",
             fixable=True, title=f"`{tool.name}` reports {len(issues)} {what} in {nfiles} file(s)",
@@ -158,61 +169,61 @@ def _lint(ctx: _Ctx, tools: list[Tool], keep: set[str], severity: str) -> tuple[
     return out, with_findings
 
 
-def _restore_point(ws: Workspace) -> str:
-    branch = ws.git_out("symbolic-ref", "-q", "--short", "HEAD").strip()
-    return branch or ws.head()
-
-
 def analyze(pr: PullRequest, cfg: Config, workspace: str) -> dict[str, Any]:
     """Run the repo's enforced tools on the PR. Offline: needs `prepare` (or a fetch) first."""
     result: dict[str, Any] = {"version": VERSION, "repo": pr.repo, "number": pr.number,
-                              "head_sha": pr.head_sha, "findings": [], "patch": "", "notes": []}
+                              "head_sha": pr.head_sha, "base_sha": pr.base_sha, "complete": True,
+                              "findings": [], "patch": "", "notes": []}
     policy = cfg.get("execution", "same-repo")
     if policy == "never" or not cfg.check_enabled("lint"):
         return result
     ws = Workspace(workspace)
     if not ws.is_repo():
-        result["notes"].append("No git checkout available for linting.")
-        return result
+        raise AnalysisFailed("No git checkout available for linting.")
     if ws.has_credentials():
         raise WorkspaceDirty(f"{ws.path}/.git/config holds credentials; check out with persist-credentials: false")
     status = ws.git_out("status", "--porcelain", "--untracked-files=no").strip()
     if status:
         raise WorkspaceDirty(f"{ws.path} has uncommitted changes; use a dedicated clone for --workspace")
-    restore = _restore_point(ws)
+    restore = ws.current_ref()
     try:
         # 1. Decide tools from the BASE branch, so the PR cannot pick them.
         base_rev = f"refs/prbot/base-{pr.number}"
-        if not ws.git_out("rev-parse", "--verify", "--quiet", base_rev).strip() or not ws.checkout(base_rev):
-            # not fetched (e.g. the workflow checked out the base branch itself): use what is checked out
-            base_rev = restore
-            ws.checkout(base_rev)
+        if ws.git_out("rev-parse", "--verify", "--quiet", base_rev).strip() and not ws.checkout(pr.base_sha):
+            raise AnalysisFailed("Could not check out the PR base commit for linting.")
         lc = cfg.check("lint")
-        tools = detect_tools(ws.path, lc.get("tools", "auto"), lc.get("require_enforcement", True))
+        unavailable: list[Tool] = []
+        tools = detect_tools(ws.path, lc.get("tools", "auto"), lc.get("require_enforcement", True),
+                             unavailable=unavailable)
         if policy != "always" and pr.is_fork:
             tools = [t for t in tools if t.safe_untrusted]
-        if not tools:
+            unavailable = [t for t in unavailable if t.safe_untrusted]
+        if not (tools or unavailable):
             return result
         # 2. Run them on the PR head.
         if not ws.checkout(pr.head_sha):
-            result["notes"].append("Could not check out the PR head for linting.")
-            return result
+            raise AnalysisFailed("Could not check out the PR head for linting.")
         keep = ws.untracked()
         ctx = _Ctx(pr=pr, cfg=cfg, workspace=ws.path)  # ws.path is already realpath'd
+        missing = [tool.name for tool in unavailable if _files_for(tool, ctx)]
+        if missing:
+            raise AnalysisFailed("Install the configured lint tools: " + ", ".join(missing))
         findings, with_findings = _lint(ctx, tools, keep, cfg.check("lint").get("severity", BLOCKING))
         if findings:
-            fps = _fixer_patches(ctx, with_findings, keep)
-            text = patches.render(fps)
-            if len(text.encode("utf-8", "surrogateescape")) <= MAX_PATCH_BYTES:
-                result["patch"] = text
+            try:
+                fps = _fixer_patches(ctx, with_findings, keep)
+                text = patches.render(fps)
+                if len(text.encode("utf-8", "surrogateescape")) <= MAX_PATCH_BYTES:
+                    result["patch"] = text
+            except AnalysisFailed as exc:
+                ctx.notes.append(str(exc))
         result["findings"] = [dataclasses.asdict(f) for f in findings]
         result["notes"] = ctx.notes
         result["tools"] = [t.name for t in with_findings]
         return result
     finally:
         ws.reset()
-        if ws.git("checkout", "--force", "-q", restore).code != 0:
-            ws.checkout(restore)
+        ws.checkout(restore, detach=False)
 
 
 # --------------------------------------------------------------------------- loading (privileged side)
@@ -239,8 +250,13 @@ def load_analysis(data: Any, pr: PullRequest, ignore_paths: list[str] | None = N
         return None
     if data.get("repo") != pr.repo or data.get("number") != pr.number or data.get("head_sha") != pr.head_sha:
         return None
+    if data.get("base_sha", pr.base_sha) != pr.base_sha or data.get("complete", True) is not True:
+        return None
     findings: list[Finding] = []
-    for item in (data.get("findings") or [])[:20]:
+    items = data.get("findings", [])
+    if not isinstance(items, list):
+        return None
+    for item in items[:20]:
         if not isinstance(item, dict):
             continue
         key = _s(item.get("key"), 64)
@@ -277,9 +293,9 @@ def fetch_analysis(gh, pr: PullRequest, workflow_path: str | None = None) -> "An
             continue
         try:
             data = json.loads(files[ARTIFACT_FILE].decode("utf-8", "surrogateescape"))
-        except ValueError:
+            loaded = load_analysis(data, pr)
+        except (TypeError, ValueError):
             continue
-        loaded = load_analysis(data, pr)
         if loaded is not None:
             return loaded
     return None

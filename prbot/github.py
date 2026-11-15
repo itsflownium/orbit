@@ -40,7 +40,9 @@ class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+        current = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        if new is not None and (current.scheme, current.netloc) != (target.scheme, target.netloc):
             for name in list(new.headers):
                 if name.lower() == "authorization":
                     del new.headers[name]
@@ -219,9 +221,11 @@ class GitHub:
             for f in self.paginate(f"/repos/{repo}/pulls/{number}/files", limit=3000)
         ]
 
-    def list_open_prs(self, repo: str, limit: int | None = None) -> list[dict]:
-        return list(self.paginate(f"/repos/{repo}/pulls", {"state": "open", "sort": "updated",
-                                                          "direction": "desc"}, limit=limit))
+    def list_open_prs(self, repo: str, limit: int | None = None, *, head: str | None = None) -> list[dict]:
+        params = {"state": "open", "sort": "updated", "direction": "desc"}
+        if head:
+            params["head"] = head
+        return list(self.paginate(f"/repos/{repo}/pulls", params, limit=limit))
 
     def get_pr_diff(self, repo: str, number: int) -> str:
         return self.request("GET", f"/repos/{repo}/pulls/{number}", accept="application/vnd.github.diff", raw=True)
@@ -241,7 +245,11 @@ class GitHub:
         return list(self.paginate(f"/repos/{repo}/commits/{sha}/check-runs"))
 
     def combined_status(self, repo: str, sha: str) -> dict:
-        return self.request("GET", f"/repos/{repo}/commits/{sha}/status")
+        data = self.request("GET", f"/repos/{repo}/commits/{sha}/status", params={"per_page": 100})
+        statuses = list(data.get("statuses", []))
+        while next_page := _next_link(getattr(self, "_last_link", "")):
+            statuses.extend(self.request("GET", next_page).get("statuses", []))
+        return {**data, "statuses": statuses}
 
     def get_labels(self, repo: str, number: int) -> set[str]:
         return {lbl["name"] for lbl in self.paginate(f"/repos/{repo}/issues/{number}/labels")}
@@ -324,15 +332,21 @@ class GitHub:
         newest) so a stray artifact for the same commit cannot hide the real one.
         """
         out = []
+        runs: dict[int, dict] = {}
         for art in self.paginate(f"/repos/{repo}/actions/artifacts", {"name": name}, limit=100):
             ref = art.get("workflow_run") or {}
             if art.get("expired") or ref.get("head_sha") != pr.head_sha or not ref.get("id"):
                 continue
-            try:
-                run = self.request("GET", f"/repos/{repo}/actions/runs/{ref['id']}")
-            except GitHubError:
-                continue
+            run_id = ref["id"]
+            if run_id not in runs:
+                try:
+                    runs[run_id] = self.request("GET", f"/repos/{repo}/actions/runs/{run_id}")
+                except GitHubError:
+                    runs[run_id] = {}
+            run = runs[run_id]
             if run.get("event") != "pull_request":
+                continue
+            if run.get("conclusion") not in (None, "success"):
                 continue
             if workflow_path and run.get("path", "").split("@")[0] != workflow_path:
                 continue

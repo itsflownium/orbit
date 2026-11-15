@@ -5,8 +5,11 @@ Uses one GraphQL query per 50 open PRs (files included), cached for the whole ru
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
+from ..diffutil import glob_match
 from ..models import Finding
 from . import Context, check
 
@@ -15,7 +18,20 @@ query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
-      nodes { number title author { login } files(first: 100) { nodes { path } } }
+      nodes {
+        number title author { login }
+        files(first: 100) { nodes { path } pageInfo { hasNextPage endCursor } }
+      }
+    }
+  }
+}
+"""
+
+_FILE_PAGE = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      files(first: 100, after: $cursor) { nodes { path } pageInfo { hasNextPage endCursor } }
     }
   }
 }
@@ -35,30 +51,58 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def open_pr_index(ctx: Context) -> list[dict]:
-    key = ("open_prs", ctx.pr.repo)
+    cfg = ctx.cfg.check("overlap")
+    limit = cfg["max_prs_scanned"]
+    file_limit = cfg.get("max_files_per_pr", 100)
+    key = ("open_prs", ctx.pr.repo, limit, file_limit)
     if key in ctx.shared:
         return ctx.shared[key]
-    limit = ctx.cfg.check("overlap")["max_prs_scanned"]
     owner, name = ctx.pr.repo.split("/", 1)
-    out, cursor = [], None
+    out, seen, cursor = [], set(), None
     while len(out) < limit:
         data = ctx.gh.graphql(_QUERY, {"owner": owner, "name": name, "cursor": cursor})
         prs = data["data"]["repository"]["pullRequests"]
         for node in prs["nodes"]:
+            if len(out) >= limit:
+                break
+            if node["number"] in seen:
+                continue
+            seen.add(node["number"])
+            files = node.get("files") or {}
+            paths = [f["path"] for f in files.get("nodes", [])][:file_limit]
+            page = files.get("pageInfo") or {}
+            while len(paths) < file_limit and page.get("hasNextPage"):
+                data = ctx.gh.graphql(_FILE_PAGE, {"owner": owner, "name": name, "number": node["number"],
+                                                   "cursor": page["endCursor"]})
+                files = data["data"]["repository"]["pullRequest"]["files"]
+                paths.extend(f["path"] for f in files["nodes"][:file_limit - len(paths)])
+                page = files["pageInfo"]
             out.append({"number": node["number"], "title": node["title"],
                         "author": (node.get("author") or {}).get("login"),
-                        "files": {f["path"] for f in (node.get("files") or {}).get("nodes", [])}})
+                        "files": set(paths)})
         if not prs["pageInfo"]["hasNextPage"]:
             break
         cursor = prs["pageInfo"]["endCursor"]
-    ctx.shared[key] = out[:limit]
+    ctx.shared[key] = out
+    return out
+
+
+def overlap_fingerprint(ctx: Context) -> str:
+    cfg = ctx.cfg.check("overlap")
+    key = ("overlap_fp", ctx.pr.repo, cfg["max_prs_scanned"], cfg["max_files_per_pr"])
+    if key not in ctx.shared:
+        index = open_pr_index(ctx)
+        comparable = sorted((r["number"], r["title"], sorted(r["files"])) for r in index)
+        ctx.shared[key] = hashlib.sha1(json.dumps(comparable).encode()).hexdigest()[:12]
     return ctx.shared[key]
 
 
 @check("overlap")
 def overlap(ctx: Context) -> list[Finding]:
     cfg = ctx.cfg.check("overlap")
-    index = open_pr_index(ctx)
+    ignore = ctx.cfg.get("ignore_paths", [])
+    index = [{**pr, "files": {path for path in pr["files"] if not glob_match(path, ignore)}}
+             for pr in open_pr_index(ctx)]
     mine_all = {f.filename for f in ctx.files}
     # How many open PRs touch each file; hub files say nothing about duplication.
     freq: dict[str, int] = {}
