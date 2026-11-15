@@ -171,6 +171,9 @@ Org membership alone is not enough.
 
 ## Development
 
+See [AGENTS.md](AGENTS.md) for the layout and the safety rules every change must keep, and
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for open work.
+
 ```bash
 pip install -e ".[dev]"
 pytest -q
