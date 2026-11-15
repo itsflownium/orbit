@@ -84,6 +84,7 @@ DEFAULTS: dict[str, Any] = {
             "enabled": True,
             "severity": "advisory",
             "max_prs_scanned": 100,
+            "max_files_per_pr": 100,  # higher values fetch further pages for large PRs
             "min_file_overlap": 0.5,  # Jaccard similarity of the two PRs' (non-hub) file sets
             "title_similarity": 0.6,  # with at least one shared file
             "title_only_similarity": 0.85,  # flagged even without shared files
@@ -117,7 +118,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         # commit  - push fix commits to the PR branch when permitted, else fall back to suggest
         # suggest - post GitHub suggestion blocks the author can apply in one click
-        # off     - never fix, only comment
+        # comment - report findings with instructions for the author
         "mode": "commit",
         "update_branch": True,  # merge base into a PR that is behind but has no conflicts
         "commit_message": "prbot: apply automatic fixes",
@@ -187,6 +188,14 @@ class Config(dict):
         return self["labels"][name]
 
 
+def autofix_mode(cfg: dict[str, Any]) -> str:
+    options = cfg.get("autofix", {})
+    mode = options.get("mode")
+    if options.get("enabled") and mode in ("commit", "suggest"):
+        return mode
+    return "comment"
+
+
 def _normalize(user: dict[str, Any]) -> dict[str, Any]:
     """`checks: {lint: false}` means disabled, `size: null` means defaults; sections stay dicts."""
     out = dict(user)
@@ -223,7 +232,10 @@ def parse_config_dict(user: dict[str, Any]) -> Config:
 def parse_config(text: str | None) -> Config:
     user: dict[str, Any] = {}
     if text:
-        loaded = yaml.safe_load(text)
+        try:
+            loaded = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError("Invalid YAML in prereview config") from exc
         if loaded is not None and not isinstance(loaded, dict):
             raise ValueError("prereview config must be a mapping at the top level")
         user = loaded or {}
