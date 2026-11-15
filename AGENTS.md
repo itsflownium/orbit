@@ -42,7 +42,7 @@ GITHUB_TOKEN=$(gh auth token) .venv/bin/prbot --dry-run review OWNER/REPO 123
 | `prbot/workspace.py` | Hardened git: fetch, checkout, diff, apply, commit, push. |
 | `prbot/commenter.py` | The summary comment, its hidden state block, inline comments, labels, text escaping. |
 | `prbot/commands.py` | `/bot` comment commands, read from the PR's comments on every run. |
-| `prbot/llm.py` | Model providers (Hermes/OpenAI-compatible, Anthropic) and prompts; validates model output. |
+| `prbot/llm.py` | Model providers and prompts. Validates model output. |
 | `prbot/github.py` | Small REST/GraphQL client on the standard library. |
 | `prbot/config.py` | Defaults, plus the repo's `.github/prereview.yml` merged in. |
 | `prbot/cli.py` | `prbot review`, `sweep`, `event`, `prepare`, `analyze`, `pins`, `config`. |

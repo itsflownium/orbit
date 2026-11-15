@@ -365,7 +365,22 @@ def test_fallback_response_reads_the_fallback_models_text():
         class BadRequestError(Exception): ...
 
     p.client, p.anthropic = Client(), A
-    assert p.complete_json("anthropic-opus-5-5", "s", "u", {}, 100) == {"findings": []}
+    assert p.complete_json("review-model", "s", "u", {}, 100) == {"findings": []}
+
+
+def test_anthropic_requires_an_explicit_review_model(monkeypatch):
+    cfg = parse_config("llm: {provider: anthropic}")
+    provider = object()
+    monkeypatch.setattr(llm, "AnthropicProvider", lambda **_: provider)
+
+    assert llm.model_for(cfg, "review_model") is None
+    assert llm.model_for(cfg, "small_model") is None
+    assert llm.make_provider(cfg) is None
+
+    cfg = parse_config("llm: {provider: anthropic, review_model: review-model, small_model: triage-model}")
+    assert llm.model_for(cfg, "review_model") == "review-model"
+    assert llm.model_for(cfg, "small_model") == "triage-model"
+    assert llm.make_provider(cfg) is provider
 
 
 # ------------------------------------------------------------------ workspace paths through symlinks (I4)
