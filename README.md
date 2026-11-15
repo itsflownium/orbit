@@ -128,9 +128,10 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
 
 On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
-from the runner's environment. Explicit action inputs take precedence. This repository's installed
-workflow uses `PRBOT_REVIEW_RUNNER` as an optional repository variable for a runner serving Hermes
-locally when analysis completes.
+from the runner's environment. Explicit action inputs take precedence. With `setup-python: "false"`,
+the action builds an isolated environment using the runner's `python3` (3.10 or newer). This
+repository's installed workflow uses `PRBOT_REVIEW_RUNNER` as an optional repository variable for a
+runner serving Hermes locally when analysis completes.
 
 If you don't run the analysis workflow, set `analysis: {required: false}` in `.github/prereview.yml`.
 Otherwise PRs stay "waiting for lint results".
