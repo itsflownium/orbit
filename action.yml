@@ -44,6 +44,9 @@ inputs:
   tools:
     description: Analyze mode only. Extra pip packages for linting (uv lets the bot run the repo's pinned versions).
     default: "uv"
+  setup-python:
+    description: Set to false on a runner with Python 3.10 or newer to use a job-local environment.
+    default: "true"
   dry-run:
     description: Review mode only. Read only; print what the bot would post.
     default: "false"
@@ -52,6 +55,7 @@ runs:
   using: composite
   steps:
     - uses: actions/setup-python@v5
+      if: inputs.setup-python != 'false'
       with:
         python-version: "3.12"
 
@@ -61,9 +65,16 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         MODE: ${{ inputs.mode }}
         TOOLS: ${{ inputs.tools }}
+        SETUP_PYTHON: ${{ inputs.setup-python }}
         INSTALL_ANTHROPIC: ${{ inputs.anthropic-api-key != '' || env.ANTHROPIC_API_KEY != '' }}
         WORKSPACE: ${{ inputs.workspace }}
       run: |
+        if [ "$SETUP_PYTHON" = "false" ]; then
+          venv="$(mktemp -d "$RUNNER_TEMP/prbot-venv.XXXXXX")"
+          python3 -m venv "$venv"
+          export PATH="$venv/bin:$PATH"
+          printf '%s\n' "$venv/bin" >> "$GITHUB_PATH"
+        fi
         package="$ACTION_PATH"
         if [ "$MODE" != "analyze" ] && [ "$INSTALL_ANTHROPIC" = "true" ]; then package="$package[anthropic]"; fi
         python -I -m pip install --quiet "$package"
