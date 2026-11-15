@@ -131,9 +131,15 @@ The bot runs as two workflows, so PR code never runs next to a secret:
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
 
-This repository's workflow uses a GitHub App when `PRBOT_APP_ID` is set as a repository variable
-and `PRBOT_APP_PRIVATE_KEY` is stored as a repository secret. Install the app only on the repository
-it reviews, with read access to Actions, Checks and Contents and write access to Issues,
+In this repository, `PRBOT_REVIEW_IDENTITY` controls who posts reviews. Both modes use the configured
+Hermes endpoint and runner. GitHub keeps a separate summary comment for each identity.
+
+- `bot` is the default. Set the `PRBOT_APP_ID` repository variable and the `PRBOT_APP_PRIVATE_KEY`
+  repository secret to post as your GitHub App. With neither configured, GitHub Actions posts the review.
+- `user` posts as the GitHub account that owns the token in the `PRBOT_USER_REVIEW_TOKEN` repository
+  secret. Use a fine-grained token limited to the repository being reviewed.
+
+Give your App or user token read access to Actions, Checks and Contents and write access to Issues,
 Pull requests and Commit statuses.
 
 On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
