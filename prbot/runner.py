@@ -143,7 +143,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
     pr = gh.get_pr(repo, number, with_files=False)
     result: dict[str, Any] = {"repo": repo, "number": number, "title": pr.title, "author": pr.author}
     if pr.raw.get("state", "open") != "open":
-        return {**result, "skipped": "closed"}
+        return None
 
     notes: list[str] = []
     cfg = _load_cfg(gh, pr, shared, notes)
