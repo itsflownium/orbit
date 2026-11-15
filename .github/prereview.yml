@@ -8,6 +8,7 @@ checks:
   ci:
     required: [test]
   llm_review:
+    severity: blocking
     only_when_clean: false
     context_paths:
       - prbot/cli.py
@@ -16,3 +17,6 @@ checks:
 llm:
   provider: hermes
   review_model: deepseek/deepseek-v4.1-flash
+
+analysis:
+  required: false
