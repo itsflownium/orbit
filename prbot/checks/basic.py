@@ -9,8 +9,7 @@ from ..diffutil import added_lines, glob_match, top_dir
 from ..models import ADVISORY, BLOCKING, Finding
 from . import Context, check
 
-FAILED = {"failure", "timed_out", "startup_failure"}
-NEEDS_ACTION = {"action_required"}
+PASSED = {"success", "skipped", "neutral"}
 
 
 def ci_snapshot(gh, pr, shared: dict) -> tuple[list[dict], list[dict]]:
@@ -39,26 +38,34 @@ def ci(ctx: Context) -> list[Finding]:
     ignore = set(cfg.get("ignore", [])) | {ctx.cfg["status_context"]}
     pr, gh = ctx.pr, ctx.gh
     failed, pending, action = [], [], []
+    reported = set()
     runs, statuses = ci_snapshot(gh, pr, ctx.shared)
 
     for run in runs:
-        if run.get("name") in ignore:
+        name = run["name"]
+        if name in ignore:
             continue
-        if run.get("status") != "completed":
-            pending.append(run["name"])
-        elif run.get("conclusion") in FAILED:
+        reported.add(name)
+        conclusion = run.get("conclusion")
+        if run.get("status") != "completed" or conclusion is None:
+            pending.append(name)
+        elif conclusion == "action_required":
+            action.append(name)
+        elif conclusion not in PASSED:
             failed.append(run)
-        elif run.get("conclusion") in NEEDS_ACTION:
-            action.append(run["name"])
 
     for st in statuses:
-        if st.get("context") in ignore:
+        name = st["context"]
+        if name in ignore:
             continue
+        reported.add(name)
         if st.get("state") in ("failure", "error"):
-            failed.append({"name": st["context"], "details_url": st.get("target_url"),
+            failed.append({"name": name, "details_url": st.get("target_url"),
                            "output": {"summary": st.get("description")}, "_status": True})
-        elif st.get("state") == "pending":
-            pending.append(st["context"])
+        elif st.get("state") != "success":
+            pending.append(name)
+
+    missing = set(cfg.get("required", [])) - reported
 
     gates = [re.compile(p) for p in cfg.get("aggregate_patterns", [])]
     real = [r for r in failed if not any(g.search(r["name"]) for g in gates)]
@@ -68,6 +75,11 @@ def ci(ctx: Context) -> list[Finding]:
     findings: list[Finding] = []
     for i, run in enumerate(failed):
         lines = [f"[Details]({run['details_url']})" if run.get("details_url") else ""]
+        name = run["name"]
+        title = f"CI job `{name}` is failing"
+        if run.get("conclusion") in ("cancelled", "stale"):
+            title = f"CI job `{name}` was {run['conclusion']}"
+            lines.append("Rerun the job so this commit has a current result.")
         summary = str((run.get("output") or {}).get("summary") or "").strip()
         if summary:
             lines.append(summary[:600])
@@ -79,16 +91,18 @@ def ci(ctx: Context) -> list[Finding]:
                 lines.append("<details><summary>End of log</summary>\n\n```\n" + _clean_log(tail) + "\n```\n</details>")
         findings.append(Finding(
             check="ci", severity=ctx.severity("ci"), key=f"ci-{_slug(run['name'])}",
-            title=f"CI job `{run['name']}` is failing",
+            title=title,
             detail="\n\n".join(x for x in lines if x),
         ))
     for name in action:
         findings.append(Finding(check="ci", severity=ADVISORY, key=f"ci-action-{_slug(name)}",
                                 title=f"`{name}` is waiting for maintainer approval to run"))
-    if (pending or action) and ctx.severity("ci") == BLOCKING:
+    if (pending or action or missing) and ctx.severity("ci") == BLOCKING:
         ctx.pending_checks.add("ci")
+    if missing:
+        ctx.notes.append(f"Required CI has not reported for this commit: {', '.join(sorted(missing)[:5])}.")
     if pending:
-        ctx.notes.append(f"CI still running ({', '.join(sorted(set(pending))[:5])}); the bot re-checks when it finishes.")
+        ctx.notes.append(f"Waiting for CI results ({', '.join(sorted(set(pending))[:5])}).")
     return findings
 
 
@@ -96,6 +110,8 @@ def ci(ctx: Context) -> list[Finding]:
 def mergeable(ctx: Context) -> list[Finding]:
     pr = ctx.pr
     if pr.mergeable is None or pr.mergeable_state == "unknown":
+        if ctx.severity("mergeable") == BLOCKING:
+            ctx.pending_checks.add("mergeable")
         ctx.notes.append("GitHub is still computing whether this PR merges cleanly; the bot re-checks on its next run.")
         return []
     if pr.mergeable is False or pr.mergeable_state == "dirty":

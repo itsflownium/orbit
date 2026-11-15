@@ -2,6 +2,8 @@
 # built-in default (run `prbot config` to print them all). Read from the base branch only.
 
 checks:
+  ci:
+    required: [test]            # replace with the exact check names your repo requires
   tests:
     severity: blocking          # require tests for code changes...
     required_paths: ["src/**"]  # ...but only under src/
