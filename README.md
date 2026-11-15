@@ -170,10 +170,11 @@ Set `checks.ci.required` to the exact check names or commit-status contexts you 
 `[test]`). With blocking CI, Orbit waits for those results even if no check has started yet. Cancelled
 or stale runs need to be rerun. Orbit also waits while GitHub is calculating mergeability.
 
-The scheduled `prereview` catch-up checks the 20 most recently updated open PRs by default. It retries
-pending model reviews and lists PRs still waiting for lint in the Actions job summary. If a lint result
-is missing or stale, rerun the analysis for that PR. Set `PRBOT_SWEEP_LIMIT` in the workflow to change
-the batch size.
+The scheduled catch-up checks the 20 most recently updated open PRs by default. It retries pending
+model reviews and lists PRs still waiting for lint in the Actions job summary. In this repository,
+`prereview-catch-up` is the timer and calls the normal `prereview` writer. If a lint result is missing
+or stale, rerun the analysis for that PR. Set `PRBOT_SWEEP_LIMIT` in the review workflow to change the
+batch size.
 
 ## Commands (comment on the PR)
 
