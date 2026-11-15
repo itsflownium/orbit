@@ -79,13 +79,21 @@ How it uses Hermes:
 - It puts the JSON schema in the system prompt inside `<schema>` tags.
 - If your server rejects `response_format`, it turns JSON mode off and retries.
 
-For Claude, set `llm.provider: anthropic`. Install with `pip install '.[anthropic]'` from the
-source checkout and set `ANTHROPIC_API_KEY`. In GitHub Actions, use the action's `anthropic-api-key` input.
+To use Anthropic, set `llm.provider: anthropic` and set `llm.review_model` to a model ID that your
+API key can access. Triage uses that model unless you set `llm.small_model`. Install with
+`python -m pip install '.[anthropic]'` from the source checkout and set `ANTHROPIC_API_KEY`.
+In GitHub Actions, use the action's `anthropic-api-key` input.
 
 ## Try it locally (read-only)
 
+Use Python 3.10 or newer.
+
 ```bash
-pip install -e .
+git clone https://github.com/itsflownium/orbit.git
+cd orbit
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 export GITHUB_TOKEN=...   # any token that can read the repo
 ```
 
@@ -95,7 +103,7 @@ Print the comment the bot would post on one PR, without writing anything:
 orbit --dry-run review OWNER/REPO 123
 ```
 
-Use `orbit review OWNER/REPO 123 --fresh-model` to request a new model review for the same commit.
+Use `orbit --dry-run review OWNER/REPO 123 --fresh-model` to request a new model review for the same commit.
 An ordinary recheck can reuse the last model result to avoid extra inference calls.
 
 Scan the backlog and write a report:
@@ -122,14 +130,16 @@ The bot runs as two workflows, so PR code never runs next to a secret:
 
 1. Copy a trusted Orbit checkout into `.github/actions/prbot/` in the target repository. If you
    host Orbit as a separate action, update the `uses:` lines to a pinned commit the target can access.
-2. Copy both example workflows into `.github/workflows/`. Put the review workflow on the default
-   branch to receive completion events. List your CI workflow's name under `workflow_run` so the
-   bot re-checks when CI finishes. The review workflow queues writes for the repository in one group.
+2. Copy `examples/prereview-analyze.yml` to `.github/workflows/prereview-analyze.yml` and
+   `examples/prereview-workflow.yml` to `.github/workflows/prereview.yml`. Put the review workflow
+   on the default branch to receive completion events. In `workflow_run.workflows`, keep
+   `prereview-analyze` and replace `CI` with your CI workflow's name. The review workflow queues
+   writes for the repository in one group.
 3. Optional secrets (privileged workflow only):
    - `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`: your Hermes endpoint.
    - `PRBOT_PUSH_TOKEN`: a GitHub App or fine-grained token with `contents: write`. It's needed for fix
      commits, because pushes made with the default token don't trigger CI.
-   - `PRBOT_ANTHROPIC_API_KEY`: Claude credentials for the optional Claude backend.
+   - `PRBOT_ANTHROPIC_API_KEY` for the optional Anthropic provider.
 4. If the bot posts with a GitHub App token, set the action's `bot-login` input to the app's login
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
@@ -241,3 +251,7 @@ See [AGENTS.md](AGENTS.md) for the layout and the safety rules every change must
 pip install -e ".[dev]"
 pytest -q
 ```
+
+## License
+
+Orbit is available under the [MIT License](LICENSE).

@@ -129,9 +129,8 @@ DEFAULTS: dict[str, Any] = {
         # hermes | openai-compatible | anthropic | none.
         # "auto": hermes when PRBOT_LLM_BASE_URL is set, else anthropic when ANTHROPIC_API_KEY is set.
         "provider": "auto",
-        # null = the provider's default (see llm.PROVIDER_DEFAULTS). For hermes these are the
-        # Hugging Face repo ids, which is what vLLM/SGLang serve under by default. Set them to
-        # whatever name your server exposes (e.g. "hermes3:8b" on Ollama).
+        # Hermes defaults to the Hugging Face repo IDs used by vLLM and SGLang. Other providers
+        # require a review model ID and use it for triage when no small model is set.
         "small_model": None,
         "review_model": None,
         "effort": "medium",  # anthropic only
@@ -140,7 +139,7 @@ DEFAULTS: dict[str, Any] = {
         "top_p": 0.95,
         "json_mode": True,  # send response_format=json_object; auto-disabled if the server rejects it
         "max_reviews_per_run": 20,  # hard budget on deep reviews per invocation
-        "use_fallbacks": True,  # server-side refusal fallback on Claude models
+        "use_fallbacks": True,  # server-side refusal fallback for Anthropic
     },
     "comments": {
         "max_inline": 5,

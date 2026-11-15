@@ -14,6 +14,18 @@
   `github-actions[bot]` in the analysis job.
 - Analysis and CI completions on this repository start the native
   `workflow_run` writer on `main`.
+- A VM timer triggered a catch-up review of PR #43 on its original commit.
+  Orbit posted as the GitHub Actions bot using DeepSeek through Nous Portal.
+
+## Verified locally
+
+- A fresh Python environment installed Orbit both from a wheel and as an
+  editable checkout. The `orbit` command loaded both sample configurations.
+  Both example workflows resolved the vendored composite action, and its
+  install step ran in separate job-local environments.
+- A local Git fixture verified that Orbit posts a suggestion when a fork
+  disallows edits and commits a fix to the feature branch when it allows them.
+  REST fixtures verified separate summary comments for distinct GitHub App identities.
 
 ## Remaining integration checks
 
@@ -22,8 +34,9 @@
 - Verify end-to-end review and fix using a GitHub App installation token. The
   review action accepts an explicit `bot-login` for App installations.
 - The live model test used Hermes Agent as the gateway. The vLLM/SGLang example
-  defaults and the Claude backend still need authenticated tests against their
-  respective services.
+  defaults and the Anthropic provider still need authenticated tests against
+  their respective services.
+- The native GitHub cron has yet to record a run.
 
 ## Design limits
 
@@ -34,6 +47,5 @@
   limits increase GitHub API calls. Similarity is advisory by default.
 - Large repositories should bound scheduled sweeps to fit their Actions and
   GitHub API budgets.
-- The repository has no license yet. Choose one before publishing it for reuse.
 - Additional linter integrations such as mypy, Clippy, golangci-lint and
   ShellCheck remain future work.

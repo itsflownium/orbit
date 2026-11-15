@@ -53,7 +53,7 @@ def _guidelines(gh, pr, shared: dict) -> str | None:
     key = ("guidelines", pr.repo, pr.base_ref, pr.base_sha)
     if key not in shared:
         text = None
-        for path in ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md"):
+        for path in ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md"):
             text = gh.get_file_text(pr.repo, path, pr.base_ref)
             if text:
                 break

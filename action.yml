@@ -36,7 +36,7 @@ inputs:
     description: Review mode only. API key for the LLM endpoint, if it needs one.
     default: ""
   anthropic-api-key:
-    description: Review mode only. API key for the optional Claude backend.
+    description: Review mode only. API key for the optional Anthropic provider.
     default: ""
   pr-number:
     description: Analyze mode only. PR number (defaults to the triggering pull_request).

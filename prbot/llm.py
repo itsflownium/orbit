@@ -5,7 +5,7 @@ Providers:
                        server: vLLM, SGLang, Ollama, llama.cpp, or a hosted endpoint.
                        PRBOT_LLM_BASE_URL (e.g. http://localhost:8000/v1), optional PRBOT_LLM_API_KEY.
   openai-compatible  - same transport with a generic prompt, for other open models.
-  anthropic          - Claude via the official Anthropic SDK (ANTHROPIC_API_KEY), optional.
+  anthropic          - Anthropic API via the optional SDK (ANTHROPIC_API_KEY).
 
 Model output is treated as untrusted data: it can only produce findings, and every
 finding must point at a line that exists in the diff or it is dropped.
@@ -132,8 +132,8 @@ class AnthropicProvider(Provider):
         self.effort = effort
         self.use_fallbacks = use_fallbacks
 
-    # Thinking is always on for current Claude models and counts toward max_tokens, so leave
-    # generous room; requests stream so a large max_tokens does not hit HTTP timeouts.
+    # Reasoning tokens count toward max_tokens. Stream requests to allow high token limits
+    # without hitting HTTP timeouts.
     MIN_MAX_TOKENS = 32000
 
     def _final(self, stream_fn, **kwargs):
@@ -150,7 +150,7 @@ class AnthropicProvider(Provider):
         )
         a = self.anthropic
         try:
-            if self.use_fallbacks and not model.startswith("claude-haiku"):
+            if self.use_fallbacks:
                 try:
                     resp = self._final(self.client.beta.messages.stream,
                                        betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
@@ -309,7 +309,6 @@ PROVIDER_DEFAULTS = {
     # Hugging Face repo ids = the model names vLLM/SGLang serve by default.
     "hermes": {"small_model": "NousResearch/Hermes-4-14B", "review_model": "NousResearch/Hermes-4-70B"},
     "openai-compatible": {"small_model": None, "review_model": None},
-    "anthropic": {"small_model": "claude-haiku-5-5", "review_model": "claude-opus-5-5"},
 }
 
 
@@ -341,6 +340,9 @@ def make_provider(cfg: dict) -> Provider | None:
     if provider is None:
         return None
     if provider == "anthropic":
+        if not model_for(cfg, "review_model"):
+            log.warning("set llm.review_model to an Anthropic model ID")
+            return None
         try:
             return AnthropicProvider(effort=llm.get("effort", "medium"), use_fallbacks=llm.get("use_fallbacks", True))
         except ImportError:
