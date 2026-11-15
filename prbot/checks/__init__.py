@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from ..config import Config
 from ..diffutil import glob_match
-from ..models import ChangedFile, Finding, PullRequest
+from ..models import BLOCKING, ChangedFile, Finding, PullRequest
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class Context:
     shared: dict[str, Any] = field(default_factory=dict)  # caches shared across PRs in a sweep
     analysis: Any = None  # prbot.analyzer.Analysis for this head commit, if available
     notes: list[str] = field(default_factory=list)  # info lines for the summary comment
+    pending_checks: set[str] = field(default_factory=set)
 
     def severity(self, name: str) -> str:
         return self.cfg.check(name).get("severity", "advisory")
@@ -62,4 +63,6 @@ def run_checks(ctx: Context, names: list[str] | None = None, skip: set[str] | No
         except Exception as e:  # one broken check must not stop the review
             log.exception("check %s failed", name)
             ctx.notes.append(f"Check `{name}` could not run: {type(e).__name__}: {e}")
+            if ctx.severity(name) == BLOCKING:
+                ctx.pending_checks.add(name)
     return findings
