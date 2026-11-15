@@ -1,0 +1,4 @@
+def without_prefix(text, prefix):
+    if text.startswith(prefix):
+        return text[len(prefix):]
+    return text
