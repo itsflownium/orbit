@@ -3,9 +3,11 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import pytest
 
+from prbot import cli, llm
 from prbot.commands import handle_comment
 from prbot.models import ChangedFile
 from prbot.runner import render_report, review_pr, sweep
@@ -158,7 +160,7 @@ def hermes_server(monkeypatch):
     server.shutdown()
 
 
-def test_hermes_review_end_to_end(hermes_server):
+def test_hermes_review_end_to_end(hermes_server, monkeypatch):
     gh = make_gh()
     gh.files[1].append(ChangedFile("tests/test_widget.py", "added", 1, 0, "@@ -0,0 +1 @@\n+def test(): pass"))
     res = review_pr(gh, "acme/widget", 1)
@@ -176,6 +178,34 @@ def test_hermes_review_end_to_end(hermes_server):
     n = len(calls)
     review_pr(gh, "acme/widget", 1, force=True)
     assert len(hermes_server.calls) == n
+    review_pr(gh, "acme/widget", 1, fresh_model=True)
+    assert len(hermes_server.calls) == n * 2
+    assert len(gh.reviews) == 1  # still de-duplicates inline comments
+    monkeypatch.setattr(llm, "REVIEW_CACHE_VERSION", llm.REVIEW_CACHE_VERSION + 1)
+    review_pr(gh, "acme/widget", 1)
+    assert len(hermes_server.calls) == n * 3
+
+
+def test_schedule_retries_a_failed_fresh_model_review(hermes_server, monkeypatch):
+    gh = make_gh()
+    repo = "acme/widget"
+    gh.repo_files[".github/prereview.yml"] += "llm: {provider: hermes}\nchecks: {llm_review: {severity: blocking}}\n"
+    assert review_pr(gh, repo, 1)["status"] == "failure"  # model finds the wrong constant
+    n = len(hermes_server.calls)
+
+    with monkeypatch.context() as outage:
+        outage.delenv("PRBOT_LLM_BASE_URL")
+        result = review_pr(gh, repo, 1, fresh_model=True)
+        assert result["status"] == "pending" and result["waiting_on"] == ["model review"]
+        assert len(hermes_server.calls) == n
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_REPOSITORY", repo)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    assert cli.cmd_event(SimpleNamespace(workspace=None, verbose=False, dry_run=False), gh) == 0
+    assert len(hermes_server.calls) == n * 2
+    assert gh.status_writes[-1]["state"] == "failure" and "wrong constant" in gh.summary(1)
 
 
 def test_model_review_waits_for_blocking_issues(hermes_server):
