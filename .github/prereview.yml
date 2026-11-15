@@ -1,0 +1,18 @@
+llm:
+  provider: hermes
+  small_model: deepseek/deepseek-v4.1-flash
+  review_model: deepseek/deepseek-v4.1-flash
+checks:
+  llm_review:
+    only_when_clean: false
+autofix:
+  mode: suggest
+  update_branch: false
+labels:
+  needs_changes: 'prbot-smoke:needs-changes'
+  ready: 'prbot-smoke:ready'
+  disputed: 'prbot-smoke:disputed'
+  duplicate: 'prbot-smoke:possible-duplicate'
+  stale: 'prbot-smoke:stale'
+  paused: 'prbot-smoke:paused'
+status_context: prbot-smoke
