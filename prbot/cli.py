@@ -98,7 +98,8 @@ def cmd_prepare(args, gh: GitHub) -> int:
 
 def cmd_analyze(args, gh) -> int:
     """Analysis job, step 2 (no token): run the repo's tools on the PR head, write analysis.json."""
-    for var in ("GITHUB_TOKEN", "GH_TOKEN", "PRBOT_PUSH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
+    for var in ("GITHUB_TOKEN", "GH_TOKEN", "PRBOT_PUSH_TOKEN", "PRBOT_CHECKS_TOKEN",
+                "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
         if os.environ.get(var):
             log.error("%s is set; run `prbot analyze` in a step without secrets", var)
             return 2
@@ -258,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_pins(args, None)
     if args.cmd == "analyze":
         return cmd_analyze(args, None)
-    gh = GitHub(dry_run=args.dry_run)
+    gh = GitHub(dry_run=args.dry_run, checks_token=os.environ.get("PRBOT_CHECKS_TOKEN"))
     if not gh.token:
         log.warning("no GITHUB_TOKEN/GH_TOKEN set; only public repos can be read and nothing can be written")
     handler = {"review": cmd_review, "sweep": cmd_sweep, "event": cmd_event, "prepare": cmd_prepare}[args.cmd]

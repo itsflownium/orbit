@@ -139,8 +139,12 @@ Hermes endpoint and runner. GitHub keeps a separate summary comment for each ide
 - `user` posts as the GitHub account that owns the token in the `PRBOT_USER_REVIEW_TOKEN` repository
   secret. Use a fine-grained token limited to the repository being reviewed.
 
-Give your App or user token read access to Actions, Checks and Contents and write access to Issues,
-Pull requests and Commit statuses.
+Give your App or user token read access to Actions and Contents and write access to Issues,
+Pull requests and Commit statuses. Give an App token Checks read access too. GitHub does not offer
+Checks access for fine-grained personal tokens, so the installed workflow reads check runs with
+GitHub Actions' built-in token in user mode. If you write your own workflow, set the action's
+`checks-token` input to a token with Checks read access. The review still posts under the identity
+of the token passed as `github-token`.
 
 On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
 from the runner's environment. Explicit action inputs take precedence. With `setup-python: "false"`,
