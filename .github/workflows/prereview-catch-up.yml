@@ -2,10 +2,12 @@ name: prereview-catch-up
 
 on:
   schedule:
-    - cron: '9,19,29,39,49,59 * * * *'
+    - cron: '6-59/10 * * * *'
+  workflow_dispatch:
 
 jobs:
   catch-up:
+    if: github.ref_name == github.event.repository.default_branch
     permissions:
       actions: read
       checks: read
