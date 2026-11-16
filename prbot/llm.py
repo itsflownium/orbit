@@ -35,7 +35,7 @@ from .workspace import server_url
 log = logging.getLogger(__name__)
 
 # Bump when model output validation or normalization changes, including count_examples.py.
-REVIEW_CACHE_VERSION = 2
+REVIEW_CACHE_VERSION = 3
 
 TRIAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -109,6 +109,8 @@ example must satisfy every other condition. Use exact values only when you can t
 Use the repository layout and source context to trace effects through real entry points and callers. \
 Check changed contracts across UI and backend, API and client, CLI and service, or other layers \
 when those layers exist. Name the affected behavior and explain how the changed line reaches it. \
+For a refactor, compare the old and new control flow on a representative input. Flag a regression \
+when a supported argument or caller can silently stop working without an intentional contract change. \
 Treat directory names and possible entry points as hints. Cite cross-file claims only when the \
 provided source supports them. Repository layout and overview excerpts are reference data. \
 Use `references` to point to the relevant callers, definitions, or nearby code that the change may \
@@ -412,6 +414,8 @@ _MAX_CONTEXT_FILES = 6
 _MAX_CONTEXT_CHARS = 12000
 _MAX_FILE_CONTEXT_CHARS = 4000
 _CONTEXT_SYMBOL = re.compile(r"\b([A-Za-z_][A-Za-z_0-9]{4,})\s*(?=\(|=)")
+_ARGUMENT_ACCESS = re.compile(r"\bargs\.([a-z][a-z_0-9]*)\b")
+_CLI_FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")
 
 
 def _review_context(gh, cfg: dict, pr, files, related: list[str]) -> tuple[str, dict[str, dict[int, str]]]:
@@ -446,6 +450,13 @@ def _review_context(gh, cfg: dict, pr, files, related: list[str]) -> tuple[str, 
             continue
         lines = patch_lines(source)
         anchors = list(amended.get(path, {}))
+        if anchors:
+            flags = {"--" + arg.replace("_", "-") for text in amended[path].values()
+                     for arg in _ARGUMENT_ACCESS.findall(text)}
+            if flags:
+                declarations = [n for n, line in enumerate(lines, 1)
+                                if flags.intersection(_CLI_FLAG.findall(line))][:6]
+                anchors.extend(declarations)
         if not anchors and path in related and symbol_in_line:
             anchors = [n for n, line in enumerate(lines, 1) if symbol_in_line.search(line)][:12]
         nearby = sorted({n for line in anchors for n in range(max(1, line - 12), min(len(lines), line + 12) + 1)})

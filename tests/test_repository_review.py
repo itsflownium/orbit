@@ -78,6 +78,21 @@ def test_exact_duplicates_require_the_complete_changes_and_can_match_the_default
     assert {f.key for f in matches()} == {"overlap"}
 
 
+def test_model_can_see_flag_help_and_the_review_summary_marks_pending():
+    gh = FakeGitHub()
+    gh.prs[1] = pr_data()
+    path = "cli.py"
+    gh.files[1] = [ChangedFile(path, "modified", 1, 1, "@@ -1 +1 @@\n-review(args.fresh_model)\n+review(args.force)")]
+    gh.repo_files[path] = "review(args.force)\n" + "\n" * 70 + 'parser.add_argument("--force", help="Review drafts")\n'
+    pr = gh.get_pr(REPO, 1)
+    cfg = parse_config(None)
+    context, visible = llm._review_context(gh, cfg, pr, pr.files, [])
+    assert '72 | parser.add_argument("--force", help="Review drafts")' in context
+    assert 72 in visible[path]
+    body = commenter.render(pr, [], [], {"llm_pending": True, "ready": True}, cfg)
+    assert "Required checks passed" in body and "Model review is pending" in body
+
+
 def test_empty_diff_uses_commit_ancestry_for_the_default_branch():
     gh = FakeGitHub()
     gh.prs[1] = pr_data(changed_files=0)

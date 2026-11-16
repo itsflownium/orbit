@@ -211,9 +211,9 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
     elif state.get("pending_checks"):
         out.append("### Pre-review: waiting for required checks\n\n"
                    "See the checks and run details for the latest status.")
-    elif state.get("llm_pending") and not state.get("ready"):
-        out.append("### Pre-review: waiting for model review\n\n"
-                   "The bot will retry on the next review run.")
+    elif state.get("llm_pending"):
+        heading = "Required checks passed" if state.get("ready") else "Pre-review: waiting for model review"
+        out.append(f"### {heading}\n\nModel review is pending. Orbit will retry on the next review run.")
     else:
         out.append("### Pre-review passed\n")
         if potential:
