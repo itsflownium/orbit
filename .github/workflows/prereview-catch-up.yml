@@ -17,6 +17,7 @@ jobs:
     uses: ./.github/workflows/prereview.yml
     secrets:
       PRBOT_USER_REVIEW_TOKEN: ${{ secrets.PRBOT_USER_REVIEW_TOKEN }}
+      PRBOT_PUSH_TOKEN: ${{ secrets.PRBOT_PUSH_TOKEN }}
       PRBOT_APP_PRIVATE_KEY: ${{ secrets.PRBOT_APP_PRIVATE_KEY }}
       PRBOT_LLM_BASE_URL: ${{ secrets.PRBOT_LLM_BASE_URL }}
       PRBOT_LLM_API_KEY: ${{ secrets.PRBOT_LLM_API_KEY }}
