@@ -137,7 +137,7 @@ def size(ctx: Context) -> list[Finding]:
     cfg = ctx.cfg.check("size")
     files = ctx.files
     lines = sum(f.additions + f.deletions for f in files)
-    if lines <= cfg["max_lines"] and len(files) <= cfg["max_files"]:
+    if lines <= cfg["max_lines"] or len(files) <= cfg["max_files"]:
         return []
     by_dir = Counter()
     for f in files:
