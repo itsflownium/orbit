@@ -15,8 +15,8 @@ llm:
   review_model: deepseek/deepseek-v4.1-flash
 ```
 
-For Hermes or another compatible chat completions endpoint, configure `PRBOT_LLM_BASE_URL`
-and add `PRBOT_LLM_API_KEY` if the endpoint requires one. Most Orbit checks run without a model.
+For Hermes or another compatible chat completions endpoint, configure `ORBIT_LLM_BASE_URL`
+and add `ORBIT_LLM_API_KEY` if the endpoint requires one. Most Orbit checks run without a model.
 
 ## What it does on each PR
 
@@ -37,8 +37,12 @@ and add `PRBOT_LLM_API_KEY` if the endpoint requires one. Most Orbit checks run 
      the condition that causes the problem, the impact, and how to fix and verify it.
    - Findings can link to related code on the reviewed commit. The bot reads nearby source and any
      exact paths listed in `checks.llm_review.context_paths`, then verifies each linked line.
+   - Repository entry points, related modules, and architecture docs from the base commit help the
+     model trace a change through callers and across layers. Configure `context_paths` when the
+     relevant API, frontend, test, or service lives somewhere less obvious.
 5. **One summary comment, edited in place**, plus inline comments, labels and a `pre-review` commit status.
-   It re-checks on every push, and fixed items are ticked off.
+   The summary shows the posting method, possible blockers, and matching open PRs or changes already
+   present on the default branch. It re-checks on every push, and fixed items are ticked off.
 
 For hermes-agent, see [examples/hermes-agent.prereview.yml](examples/hermes-agent.prereview.yml): a config
 based on that repo's CI, PR template and lint setup.
@@ -58,7 +62,7 @@ autofix:
   replacement is plain code in the comment. `off` and `enabled: false` also select this behavior.
 - `suggest` delivers available patches as GitHub suggestions the author can apply. An authorized
   `/bot fix` can explicitly request a commit.
-- `commit` applies supported lint and formatter patches with `PRBOT_PUSH_TOKEN`. It falls back to
+- `commit` applies supported lint and formatter patches with `ORBIT_PUSH_TOKEN`. It falls back to
   suggestions when the branch cannot be updated. Set `update_branch: false` to keep branch
   synchronization manual. Model findings remain review feedback for the author.
 
@@ -70,7 +74,7 @@ Any OpenAI-compatible server works: vLLM, SGLang, Ollama, llama.cpp or a hosted 
 
 ```bash
 vllm serve NousResearch/Hermes-4-70B --port 8000
-export PRBOT_LLM_BASE_URL=http://localhost:8000/v1
+export ORBIT_LLM_BASE_URL=http://localhost:8000/v1
 ```
 
 The default model names are the Hugging Face repo IDs:
@@ -112,6 +116,15 @@ Print the comment the bot would post on one PR, without writing anything:
 orbit --dry-run review OWNER/REPO 123
 ```
 
+If Git already has an HTTPS credential for the repository, use its credential helper:
+
+```bash
+orbit --dry-run --use-git-credentials review OWNER/REPO 123
+```
+
+Use the same command without `--dry-run` when you want to post under the signed-in GitHub account.
+For a standalone review process on a VM, supply that account's token as `GITHUB_TOKEN`.
+
 Use `orbit --dry-run review OWNER/REPO 123 --fresh-model` to request a new model review for the same commit.
 An ordinary recheck can reuse the last model result to avoid extra inference calls.
 
@@ -145,34 +158,35 @@ The bot runs as two workflows, so PR code never runs next to a secret:
    `prereview-analyze` and replace `CI` with your CI workflow's name. The review workflow queues
    writes for the repository in one group.
 3. Optional secrets (privileged workflow only):
-   - `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`: your Hermes endpoint.
-   - `PRBOT_PUSH_TOKEN`: a GitHub App or fine-grained token with `contents: write`. It's needed for fix
+   - `ORBIT_LLM_BASE_URL` and `ORBIT_LLM_API_KEY`: your Hermes endpoint.
+   - `ORBIT_PUSH_TOKEN`: a GitHub App or fine-grained token with `contents: write`. It's needed for fix
      commits, because pushes made with the default token don't trigger CI.
-   - `PRBOT_ANTHROPIC_API_KEY` for the optional Anthropic provider.
+   - `ORBIT_ANTHROPIC_API_KEY` for the optional Anthropic provider.
 4. If the bot posts with a GitHub App token, set the action's `bot-login` input to the app's login
    (e.g. `my-app[bot]`). The bot only trusts summary comments by that login.
 5. Start with `dry-run: "true"` in the privileged workflow, read the job logs, then turn it off.
 
-In this repository, `PRBOT_REVIEW_IDENTITY` controls who posts reviews. Both modes use the configured
-Hermes endpoint and runner. GitHub keeps a separate summary comment for each identity.
+Set the repository variable `ORBIT_REVIEW_IDENTITY` to choose who posts. Both modes use the configured
+model endpoint and runner. Each posting account owns its summary comment.
 
-- `bot` is the default. Set the `PRBOT_APP_ID` repository variable and the `PRBOT_APP_PRIVATE_KEY`
-  repository secret to post as your GitHub App. With neither configured, GitHub Actions posts the review.
-- `user` posts as the GitHub account that owns the token in the `PRBOT_USER_REVIEW_TOKEN` repository
-  secret. Use a fine-grained token limited to the repository being reviewed.
+- `bot` uses the GitHub Actions bot by default. This repository's workflow also supports an optional
+  GitHub App through `ORBIT_APP_ID` and `ORBIT_APP_PRIVATE_KEY`.
+- `user` posts as the GitHub account that owns the token in the `ORBIT_USER_REVIEW_TOKEN` repository
+  secret. Use a fine-grained token limited to the repository being reviewed. You can instead provide
+  `ORBIT_USER_REVIEW_TOKEN` in the environment of a dedicated runner selected by `ORBIT_REVIEW_RUNNER`.
 
 Give your App or user token read access to Actions and Contents and write access to Issues,
 Pull requests and Commit statuses. Give an App token Checks read access too. GitHub does not offer
 Checks access for fine-grained personal tokens, so the installed workflow reads check runs with
-GitHub Actions' built-in token in user mode. If you write your own workflow, set the action's
-`checks-token` input to a token with Checks read access. The review still posts under the identity
-of the token passed as `github-token`.
+GitHub Actions' built-in token in user mode. For a custom workflow, the `checks-token` input can
+select another credential for reading checks.
 
-On a dedicated review runner, the action also reads `PRBOT_LLM_BASE_URL` and `PRBOT_LLM_API_KEY`
+On a dedicated review runner, the action also reads `ORBIT_LLM_BASE_URL` and `ORBIT_LLM_API_KEY`
 from the runner's environment. Explicit action inputs take precedence. With `setup-python: "false"`,
 the action builds an isolated environment using the runner's `python3` (3.10 or newer). This
-repository's installed workflow uses `PRBOT_REVIEW_RUNNER` as an optional repository variable for a
-runner serving Hermes locally when analysis completes.
+repository's installed workflow uses `ORBIT_REVIEW_RUNNER` as an optional repository variable for a
+runner serving Hermes locally when analysis completes. Existing installations can also supply the
+older setting prefix where it is listed as a workflow fallback.
 
 If you don't run the analysis workflow, set `analysis: {required: false}` in `.github/prereview.yml`.
 Otherwise PRs stay "waiting for lint results".
@@ -192,7 +206,7 @@ or stale runs need to be rerun. Orbit also waits while GitHub is calculating mer
 The scheduled catch-up checks the 20 most recently updated open PRs by default. It retries pending
 model reviews and lists PRs still waiting for lint in the Actions job summary. In this repository,
 `prereview-catch-up` is the timer and calls the normal `prereview` writer. If a lint result is missing
-or stale, rerun the analysis for that PR. Set `PRBOT_SWEEP_LIMIT` in the review workflow to change the
+or stale, rerun the analysis for that PR. Set `ORBIT_SWEEP_LIMIT` in the review workflow to change the
 batch size.
 
 ## Commands (comment on the PR)
