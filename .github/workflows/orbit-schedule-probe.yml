@@ -1,0 +1,16 @@
+name: Orbit schedule delivery check
+
+on:
+  schedule:
+    - cron: '4-59/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record scheduler delivery
+        run: printf 'GitHub delivered %s to %s\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF_NAME"
