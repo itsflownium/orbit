@@ -10,6 +10,8 @@ on:
     secrets:
       PRBOT_USER_REVIEW_TOKEN:
         required: false
+      PRBOT_PUSH_TOKEN:
+        required: false
       PRBOT_APP_PRIVATE_KEY:
         required: false
       PRBOT_LLM_BASE_URL:
@@ -100,6 +102,7 @@ jobs:
         with:
           github-token: ${{ (vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN) || steps.orbit-token.outputs.token || github.token }}
           checks-token: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && github.token || '' }}
+          push-token: ${{ secrets.PRBOT_PUSH_TOKEN }}
           bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
           llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
