@@ -17,6 +17,14 @@ inputs:
   checks-token:
     description: Review mode only. Optional token with Checks read access, used only to read check runs.
     default: ""
+  review-identity:
+    description: Review mode only. Use "bot" (the default) or "user" to post as the token's account.
+    default: ""
+  user-review-token:
+    description: >-
+      Review mode only. Personal access token for user identity. A dedicated review runner
+      can provide ORBIT_USER_REVIEW_TOKEN through its environment.
+    default: ""
   push-token:
     description: >
       Review mode only. Optional GitHub App or fine-grained token with contents:write. Needed to
@@ -73,7 +81,7 @@ runs:
         WORKSPACE: ${{ inputs.workspace }}
       run: |
         if [ "$SETUP_PYTHON" = "false" ]; then
-          venv="$(mktemp -d "$RUNNER_TEMP/prbot-venv.XXXXXX")"
+          venv="$(mktemp -d "$RUNNER_TEMP/orbit-venv.XXXXXX")"
           python3 -m venv "$venv"
           export PATH="$venv/bin:$PATH"
           printf '%s\n' "$venv/bin" >> "$GITHUB_PATH"
@@ -87,7 +95,7 @@ runs:
             python -m pip install --quiet "${extra[@]}"
           fi
           # pins are read from the base checkout, never from the PR
-          read -r -a pins <<< "$(prbot --workspace "$WORKSPACE" pins)"
+          read -r -a pins <<< "$(orbit --workspace "$WORKSPACE" pins)"
           if [ "${#pins[@]}" -gt 0 ]; then python -m pip install --quiet "${pins[@]}"; fi
         fi
 
@@ -101,7 +109,7 @@ runs:
         PR: ${{ inputs.pr-number }}
         WORKSPACE: ${{ inputs.workspace }}
         OUT: ${{ runner.temp }}/pr.json
-      run: prbot --workspace "$WORKSPACE" prepare "$REPO" "$PR" --out "$OUT"
+      run: orbit --workspace "$WORKSPACE" prepare "$REPO" "$PR" --out "$OUT"
 
     - name: Run the repo's linters on the PR (no token)
       if: inputs.mode == 'analyze'
@@ -112,10 +120,10 @@ runs:
         OUT: ${{ runner.temp }}/prbot-analysis/analysis.json
       run: |
         mkdir -p "$(dirname "$OUT")"
-        env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+          env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
             -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_CACHE_URL -u ACTIONS_RESULTS_URL \
-            -u PRBOT_CHECKS_TOKEN \
-          prbot --workspace "$WORKSPACE" analyze --pr-json "$IN" --out "$OUT"
+            -u ORBIT_CHECKS_TOKEN -u PRBOT_CHECKS_TOKEN \
+          orbit --workspace "$WORKSPACE" analyze --pr-json "$IN" --out "$OUT"
 
     - name: Upload analysis
       if: inputs.mode == 'analyze'
@@ -131,17 +139,38 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        PRBOT_CHECKS_TOKEN: ${{ inputs.checks-token }}
-        PRBOT_PUSH_TOKEN: ${{ inputs.push-token }}
-        PRBOT_LOGIN: ${{ inputs.bot-login }}
+        ORBIT_CHECKS_TOKEN: ${{ inputs.checks-token }}
+        ORBIT_PUSH_TOKEN: ${{ inputs.push-token }}
+        ORBIT_LOGIN: ${{ inputs.bot-login }}
+        ACTIONS_GITHUB_TOKEN: ${{ github.token }}
+        REVIEW_IDENTITY_INPUT: ${{ inputs.review-identity }}
+        USER_REVIEW_TOKEN_INPUT: ${{ inputs.user-review-token }}
         LLM_BASE_URL_INPUT: ${{ inputs.llm-base-url }}
         LLM_API_KEY_INPUT: ${{ inputs.llm-api-key }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key || env.ANTHROPIC_API_KEY }}
         WORKSPACE: ${{ inputs.workspace }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
-        if [ -n "$LLM_BASE_URL_INPUT" ]; then export PRBOT_LLM_BASE_URL="$LLM_BASE_URL_INPUT"; fi
-        if [ -n "$LLM_API_KEY_INPUT" ]; then export PRBOT_LLM_API_KEY="$LLM_API_KEY_INPUT"; fi
+        case "${REVIEW_IDENTITY_INPUT:-${ORBIT_REVIEW_IDENTITY:-bot}}" in
+          bot) ;;
+          user)
+            token="${USER_REVIEW_TOKEN_INPUT:-${ORBIT_USER_REVIEW_TOKEN:-}}"
+            if [ -z "$token" ] || [[ "$token" =~ [[:space:]] ]]; then
+              echo '::error::User review mode requires a valid ORBIT_USER_REVIEW_TOKEN.'
+              exit 1
+            fi
+            printf '::add-mask::%s\n' "$token"
+            export GITHUB_TOKEN="$token"
+            export ORBIT_CHECKS_TOKEN="${ORBIT_CHECKS_TOKEN:-$ACTIONS_GITHUB_TOKEN}"
+            unset ORBIT_LOGIN PRBOT_LOGIN token USER_REVIEW_TOKEN_INPUT ORBIT_USER_REVIEW_TOKEN
+            ;;
+          *)
+            echo '::error::ORBIT_REVIEW_IDENTITY must be bot or user.'
+            exit 1
+            ;;
+        esac
+        if [ -n "$LLM_BASE_URL_INPUT" ]; then export ORBIT_LLM_BASE_URL="$LLM_BASE_URL_INPUT"; fi
+        if [ -n "$LLM_API_KEY_INPUT" ]; then export ORBIT_LLM_API_KEY="$LLM_API_KEY_INPUT"; fi
         flags=()
         if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
-        prbot "${flags[@]}" --workspace "$WORKSPACE" event
+        orbit "${flags[@]}" --workspace "$WORKSPACE" event

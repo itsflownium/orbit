@@ -31,6 +31,8 @@ class FakeGitHub:
         self.files: dict[int, list[ChangedFile]] = {}
         # most tests have no analysis workflow; tests of the lint gate set this back to required
         self.repo_files: dict[str, str] = {".github/prereview.yml": "analysis:\n  required: false\n"}
+        self.trees: dict[str, tuple[dict[str, tuple[str, str]], bool]] = {}
+        self.comparisons: dict[tuple[str, str], str] = {}
         self.check_runs_by_sha: dict[str, list[dict]] = {}
         self.statuses_by_sha: dict[str, list[dict]] = {}
         self.comments: dict[int, list[dict]] = {}
@@ -78,6 +80,12 @@ class FakeGitHub:
     def get_file_text(self, repo, path, ref):
         return self.repo_files.get(path)
 
+    def get_tree(self, repo, ref):
+        return self.trees.get(ref, ({}, False))
+
+    def compare_status(self, repo, base_sha, head_sha):
+        return self.comparisons.get((base_sha, head_sha))
+
     def check_runs(self, repo, sha):
         return self.check_runs_by_sha.get(sha, [])
 
@@ -92,6 +100,8 @@ class FakeGitHub:
 
     def graphql(self, query, variables):
         nodes = [{"number": n, "title": d["title"], "author": {"login": d["user"]["login"]},
+                  "headRefOid": d["head"]["sha"], "baseRefName": d["base"]["ref"],
+                  "changedFiles": d.get("changed_files"),
                   "files": {"nodes": [{"path": f.filename} for f in self.files.get(n, [])]}}
                  for n, d in sorted(self.prs.items())]
         return {"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": None},

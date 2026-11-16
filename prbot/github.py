@@ -17,6 +17,7 @@ import urllib.request
 import zipfile
 from typing import Any, Iterator
 
+from . import orbit_env
 from .models import ChangedFile, PullRequest
 
 log = logging.getLogger(__name__)
@@ -83,12 +84,24 @@ class GitHubError(RuntimeError):
         self.status = status
 
 
+def cached_tree(gh, repo: str, ref: str, shared: dict) -> tuple[dict[str, tuple[str, str]], bool]:
+    key = ("git_tree", repo, ref)
+    if key not in shared:
+        try:
+            shared[key] = gh.get_tree(repo, ref)
+        except (GitHubError, OSError) as exc:
+            log.info("Could not read optional repository tree: %s", type(exc).__name__)
+            shared[key] = ({}, False)
+    return shared[key]
+
+
 class GitHub:
     def __init__(self, token: str | None = None, api_url: str | None = None, dry_run: bool = False,
-                 *, checks_token: str | None = None):
+                 *, checks_token: str | None = None, using_git_credentials: bool = False):
         self.token = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         self.api = (api_url or os.environ.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
         self.dry_run = dry_run
+        self.using_git_credentials = using_git_credentials
         self.writes: list[tuple[str, str, Any]] = []  # recorded writes in dry-run mode
         self._login: str | None = None
         self._checks = GitHub(token=checks_token, api_url=self.api, dry_run=dry_run) if checks_token else None
@@ -180,8 +193,8 @@ class GitHub:
 
     # ------------------------------------------------------------------ reads
     def login(self) -> str:
-        if self._login is None and os.environ.get("PRBOT_LOGIN"):
-            self._login = os.environ["PRBOT_LOGIN"]
+        if self._login is None:
+            self._login = orbit_env("LOGIN")
         if self._login is None:
             try:
                 self._login = self.request("GET", "/user").get("login", "")
@@ -193,7 +206,7 @@ class GitHub:
                     self._login = ""
             if not self._login:
                 self._login = "github-actions[bot]"
-                log.warning("could not determine the bot's login; assuming %s. Set PRBOT_LOGIN (action input "
+                log.warning("could not determine the bot's login; assuming %s. Set ORBIT_LOGIN (action input "
                             "`bot-login`) when posting with a GitHub App token.", self._login)
             elif self._login.lower() == "github-actions" or self._login.lower() == "github-actions[bot]":
                 self._login = "github-actions[bot]"
@@ -242,6 +255,18 @@ class GitHub:
         if isinstance(data, dict) and data.get("encoding") == "base64":
             return base64.b64decode(data["content"]).decode("utf-8", "replace")
         return None
+
+    def get_tree(self, repo: str, ref: str) -> tuple[dict[str, tuple[str, str]], bool]:
+        """Return paths and object identities, plus whether GitHub returned the entire tree."""
+        data = self.request("GET", f"/repos/{repo}/git/trees/{urllib.parse.quote(ref, safe='')}",
+                            params={"recursive": "1"})
+        entries = {entry["path"]: (entry["mode"], entry["sha"]) for entry in data["tree"]
+                   if entry["type"] in ("blob", "commit")}
+        return entries, not data.get("truncated", True)
+
+    def compare_status(self, repo: str, base_sha: str, head_sha: str) -> str | None:
+        data = self.request("GET", f"/repos/{repo}/compare/{base_sha}...{head_sha}", params={"per_page": 1})
+        return data.get("status")
 
     def check_runs(self, repo: str, sha: str) -> list[dict]:
         # GitHub does not let a fine-grained personal token opt into Checks access.

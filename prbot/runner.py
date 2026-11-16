@@ -154,6 +154,7 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
 
     comments = gh.issue_comments(pr.repo, pr.number)
     comment_id, state = commenter.summary_in(gh, comments)
+    method = commenter.posting_method(gh)
     previous_body = next((c.get("body") for c in comments if c.get("id") == comment_id), None)
     loaded = copy.deepcopy(state)  # snapshot, to detect a concurrent run's changes
 
@@ -201,11 +202,12 @@ def _review_once(gh, repo, number, *, workspace, shared, force, include_drafts, 
                  and not state.get("llm_pending")
                  and bool(state.get("stale")) == bool(is_stale)
                  and (analysis is None or (state.get("lint") or {}).get("sha") == pr.head_sha))
-    if unchanged and not (force or force_fix):
+    if unchanged and state.get("posting_method") == method and not (force or force_fix):
         return {**result, "skipped": "unchanged", "blocking": len(state.get("titles", {})),
                 "ready": bool(state.get("ready")), "paused": bool(state.get("paused")),
                 "blocking_titles": list(state.get("titles", {}).values())}
 
+    state["posting_method"] = method
     if state.get("paused"):
         _check_concurrent(gh, pr, loaded, last_try)
         _fingerprint(state, pr, ci_fp, cfg_hash)
@@ -403,7 +405,7 @@ def _model_review(ctx: Context, clean: bool, state: dict, rc: dict, *, fresh: bo
     """Returns (triage, findings, done). done=False means it still has to run for this commit."""
     pr, cfg, shared = ctx.pr, ctx.cfg, ctx.shared
     severity = rc.get("severity", "advisory")
-    inputs = [pr.base_ref, pr.title, pr.body, cfg["llm"], rc, llm.TRIAGE_SYSTEM, llm.REVIEW_SYSTEM,
+    inputs = [pr.base_ref, pr.base_sha, pr.title, pr.body, cfg["llm"], rc, llm.TRIAGE_SYSTEM, llm.REVIEW_SYSTEM,
               llm.REVIEW_CACHE_VERSION]
     model_fp = hashlib.sha1(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:12]
     if fresh:
@@ -460,7 +462,8 @@ def _model_review(ctx: Context, clean: bool, state: dict, rc: dict, *, fresh: bo
     if trivial:
         ctx.notes.append("Low-risk change; skipped the deep model review.")
     else:
-        review, skip_reason = llm.deep_review(provider, cfg, pr, ctx.files, _guidelines(ctx.gh, pr, shared), gh=ctx.gh)
+        review, skip_reason = llm.deep_review(provider, cfg, pr, ctx.files, _guidelines(ctx.gh, pr, shared),
+                                              gh=ctx.gh, shared=shared)
         if skip_reason:
             ctx.notes.append(f"Deep model review skipped: {skip_reason}.")
         else:
@@ -504,7 +507,7 @@ def render_report(repo: str, results: list[dict]) -> str:
     pending = [r for r in reviewed if r.get("waiting_on")]
     skipped = [r for r in results if r.get("skipped") not in (None, "unchanged") or r.get("paused")]
     errors = [r for r in results if r.get("error")]
-    lines = [f"# prbot backlog report: {repo}", "", f"Generated {when}. {len(results)} open PRs scanned.", "",
+    lines = [f"# Orbit backlog report: {repo}", "", f"Generated {when}. {len(results)} open PRs scanned.", "",
              "| Bucket | PRs |", "| --- | --- |",
              f"| Ready for maintainer review | {len(ready)} |",
              f"| Needs changes from the author | {len(needs)} |",

@@ -57,6 +57,15 @@ def is_bot_comment(gh, comment: dict) -> bool:
     return bool(login) and login == (gh.login() or "").lower()
 
 
+def posting_method(gh) -> str:
+    login = (gh.login() or "").lower()
+    if login in ("github-actions", "github-actions[bot]"):
+        return "GitHub Actions"
+    if login.endswith("[bot]"):
+        return "GitHub App"
+    return "Git credentials" if getattr(gh, "using_git_credentials", False) else "GitHub token"
+
+
 def summary_in(gh, comments: list[dict]) -> tuple[int | None, dict]:
     """The bot's own summary comment. Comments by anyone else are ignored, so the state
     (ready override, ignored checks, disputes) cannot be forged by posting the marker."""
@@ -156,6 +165,8 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
     disputes = state.get("disputes", {})
     blocking = [f for f in findings if f.blocking]
     advisory = [f for f in findings if not f.blocking and f.key not in disputes and f.check != "autofix"]
+    potential = [f for f in advisory if f.check == "llm_review" and f.path and f.line]
+    overlaps = [f for f in advisory if f.check == "overlap"]
     disputed = [f for f in findings if f.key in disputes]
     posted_inline = set(state.get("posted_inline", []))
     suggestions = [f for f in findings if f.check == "autofix" and f.key in posted_inline]
@@ -168,8 +179,13 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
         return shown
 
     out = [MARKER]
+    if method := state.get("posting_method"):
+        out.append(f"\n**Orbit · Posted via {clean(method)}**")
     if cfg.get("comments", {}).get("tag_author") and _GITHUB_LOGIN.fullmatch(pr.author):
         out.append(f"\nReview for @{pr.author}.\n")
+    if overlaps:
+        out.append("\n**Related pull requests and changes**\n")
+        out.extend(items(overlaps))
     if state.get("paused"):
         out.append("### Pre-review paused\n\nA maintainer paused automated review on this PR. "
                    "A maintainer can comment `/bot resume` to turn it back on.")
@@ -200,13 +216,21 @@ def _render(pr, findings, notes, state, cfg, fixed, triage, compact) -> str:
                    "The bot will retry on the next review run.")
     else:
         out.append("### Pre-review passed\n")
-        out.append("No blocking issues found. This PR is in the maintainers' review queue.")
+        if potential:
+            out.append("Required checks passed. Review the potential blockers below before merging.")
+        else:
+            out.append("No blocking issues found. This PR is in the maintainers' review queue.")
+    if potential:
+        out.append("\n**Potential blockers**\n")
+        out.append("These findings are advisory under this repository's review settings.")
+        out.extend(items(potential))
     if fixed:
         out.append("\n**Fixed since last check**\n")
         out.extend(f"- [x] {clean(title)}" for title in fixed[:MAX_ITEMS])
     if suggestions:
         out.append(f"\n**Suggested fixes:** {len(suggestions)} inline suggestion(s) posted; "
                    "apply them with *Commit suggestion* in the Files tab.")
+    advisory = [f for f in advisory if f not in potential and f not in overlaps]
     if advisory:
         out.append("\n**Advisory findings**\n")
         out.extend(items(advisory))
