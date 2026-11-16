@@ -232,8 +232,9 @@ def test_artifact_keys_must_be_plain():
 def test_action_passes_the_bot_login_through():
     action = yaml.safe_load(open(os.path.join(ROOT, "action.yml")))
     assert "bot-login" in action["inputs"]
-    review = next(s for s in action["runs"]["steps"] if "PRBOT_LOGIN" in s.get("env", {}))
-    assert review["env"]["PRBOT_LOGIN"] == "${{ inputs.bot-login }}"
+    review = next(s for s in action["runs"]["steps"] if "ORBIT_LOGIN" in s.get("env", {}))
+    assert review["env"]["ORBIT_LOGIN"] == "${{ inputs.bot-login }}"
+    assert review["env"]["USER_REVIEW_TOKEN_INPUT"] == "${{ inputs.user-review-token }}"
 
 
 def test_login_prefers_the_configured_value(monkeypatch):

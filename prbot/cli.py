@@ -15,18 +15,56 @@ import argparse
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import yaml
 
-from . import __version__, analyzer
+from . import __version__, analyzer, orbit_env
 from .commands import handle_comment
 from .config import parse_config
 from .github import GitHub
 from .runner import render_report, review_pr, sweep
+from .workspace import server_url
 
 log = logging.getLogger("prbot")
 DEFAULT_CATCH_UP_LIMIT = 20
+
+
+def _git_credentials(repo: str, workspace: str | None) -> tuple[str, str]:
+    """Get the repository's HTTPS credential without prompting or printing its contents."""
+    origin = urlsplit(server_url())
+    if (origin.scheme != "https" or not origin.hostname or origin.username is not None
+            or origin.path or origin.query or origin.fragment):
+        raise ValueError("Git credentials require an HTTPS GitHub server URL.")
+    if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo) or repo.endswith(("/.", "/..")):
+        raise ValueError("Specify the GitHub repository as OWNER/REPO.")
+    public_github = origin.netloc.lower() == "github.com"
+    api = "https://api.github.com" if public_github else f"https://{origin.netloc}/api/v3"
+    graphql = api + "/graphql" if public_github else api.removesuffix("/v3") + "/graphql"
+    if (os.environ.get("GITHUB_API_URL", api).rstrip("/") != api
+            or os.environ.get("GITHUB_GRAPHQL_URL", graphql).rstrip("/") != graphql):
+        raise ValueError("The GitHub API URLs must match the Git server to use its stored credential.")
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GH_TOKEN", None)
+    prompt = f"protocol=https\nhost={origin.netloc}\npath={repo}.git\n\n"
+    try:
+        result = subprocess.run(
+            ["git", "-c", "credential.interactive=false", "credential", "fill"],
+            cwd=workspace, env=env, input=prompt, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=10, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("No stored Git credential for this repository. Sign in with a Git credential helper "
+                         "or set GITHUB_TOKEN.") from None
+    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    token = fields.get("password")
+    if not token:
+        raise ValueError("The Git credential helper did not return a token for this repository.")
+    return token, api
 
 
 def _print_result(res: dict, verbose: bool) -> None:
@@ -100,10 +138,13 @@ def cmd_prepare(args, gh: GitHub) -> int:
 
 def cmd_analyze(args, gh) -> int:
     """Analysis job, step 2 (no token): run the repo's tools on the PR head, write analysis.json."""
-    for var in ("GITHUB_TOKEN", "GH_TOKEN", "PRBOT_PUSH_TOKEN", "PRBOT_CHECKS_TOKEN",
-                "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
+    for var in ("GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
         if os.environ.get(var):
             log.error("%s is set; run `prbot analyze` in a step without secrets", var)
+            return 2
+    for name in ("PUSH_TOKEN", "CHECKS_TOKEN", "USER_REVIEW_TOKEN", "LLM_API_KEY"):
+        if orbit_env(name):
+            log.error("ORBIT_%s is set; run `orbit analyze` in a step without secrets", name)
             return 2
     data = analyzer.read_analysis_file(args.pr_json)
     if data.get("fetched") is False:
@@ -189,7 +230,7 @@ def cmd_event(args, gh: GitHub) -> int:
                 log.error("fresh_model requires a pull request number")
                 return 2
             try:
-                limit = int(inputs.get("limit") or os.environ.get("PRBOT_SWEEP_LIMIT") or DEFAULT_CATCH_UP_LIMIT)
+                limit = int(inputs.get("limit") or orbit_env("SWEEP_LIMIT") or DEFAULT_CATCH_UP_LIMIT)
                 if limit < 1:
                     raise ValueError
             except ValueError:
@@ -228,6 +269,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="read from GitHub but write nothing; print comments")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--workspace", help="local clone of the repo, used to run linters and fixers")
+    p.add_argument("--use-git-credentials", action="store_true",
+                   help="use Git's stored HTTPS credential for a local review or sweep")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("review", help="review one PR")
@@ -264,7 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.use_git_credentials and args.cmd not in ("review", "sweep"):
+        parser.error("--use-git-credentials is available for review and sweep")
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     if args.cmd == "config":
@@ -273,7 +319,15 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_pins(args, None)
     if args.cmd == "analyze":
         return cmd_analyze(args, None)
-    gh = GitHub(dry_run=args.dry_run, checks_token=os.environ.get("PRBOT_CHECKS_TOKEN"))
+    token = api = None
+    if args.use_git_credentials:
+        try:
+            token, api = _git_credentials(args.repo, args.workspace)
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 2
+    gh = GitHub(token=token, api_url=api, dry_run=args.dry_run, checks_token=orbit_env("CHECKS_TOKEN"),
+                using_git_credentials=args.use_git_credentials)
     if not gh.token:
         log.warning("no GITHUB_TOKEN/GH_TOKEN set; only public repos can be read and nothing can be written")
     handler = {"review": cmd_review, "sweep": cmd_sweep, "event": cmd_event, "prepare": cmd_prepare}[args.cmd]

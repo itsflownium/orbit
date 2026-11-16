@@ -127,14 +127,14 @@ DEFAULTS: dict[str, Any] = {
     },
     "llm": {
         # hermes | openai-compatible | anthropic | none.
-        # "auto": hermes when PRBOT_LLM_BASE_URL is set, else anthropic when ANTHROPIC_API_KEY is set.
+        # "auto": hermes when ORBIT_LLM_BASE_URL is set, else anthropic when ANTHROPIC_API_KEY is set.
         "provider": "auto",
         # Hermes defaults to the Hugging Face repo IDs used by vLLM and SGLang. Other providers
         # require a review model ID and use it for triage when no small model is set.
         "small_model": None,
         "review_model": None,
         "effort": "medium",  # anthropic only
-        "base_url": None,  # OpenAI-compatible endpoint; or set PRBOT_LLM_BASE_URL
+        "base_url": None,  # OpenAI-compatible endpoint; or set ORBIT_LLM_BASE_URL
         "temperature": 0.6,  # Hermes 4 model card recommends 0.6 / top_p 0.95 / top_k 20
         "top_p": 0.95,
         "json_mode": True,  # send response_format=json_object; auto-disabled if the server rejects it

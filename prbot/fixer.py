@@ -3,7 +3,7 @@
   - Branch behind base with no conflicts: GitHub's update-branch API merges base in.
   - Lint/format issues: the analysis job already ran the repo's fixers and produced a patch.
     That patch is re-filtered to hunks touching lines the PR added, then either
-      commit  - applied with `git apply` and pushed to the PR branch. Needs PRBOT_PUSH_TOKEN (a
+      commit  - applied with `git apply` and pushed to the PR branch. Needs ORBIT_PUSH_TOKEN (a
                 GitHub App or fine-grained token) so the push triggers CI; fork PRs also need
                 "Allow edits by maintainers".
       suggest - posted as GitHub suggestion blocks the author applies in one click.
@@ -14,10 +14,9 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 
-from . import patches
+from . import orbit_env, patches
 from .checks import Context
 from .config import autofix_mode
 from .diffutil import commentable_lines
@@ -36,7 +35,7 @@ class FixResult:
 
 
 def push_token() -> str | None:
-    return os.environ.get("PRBOT_PUSH_TOKEN")
+    return orbit_env("PUSH_TOKEN")
 
 
 def can_push(ctx: Context) -> bool:

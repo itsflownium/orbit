@@ -50,7 +50,7 @@ jobs:
     concurrency:
       group: prbot-review-writes
       queue: max
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ORBIT_REVIEW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       # Base branch only. Used to commit fixes (git apply + push); no PR code is executed.
@@ -61,8 +61,11 @@ jobs:
           fetch-depth: 1
       - uses: ./.github/actions/prbot
         with:
-          push-token: ${{ secrets.PRBOT_PUSH_TOKEN }}
+          review-identity: ${{ vars.ORBIT_REVIEW_IDENTITY }}
+          user-review-token: ${{ vars.ORBIT_REVIEW_IDENTITY == 'user' && secrets.ORBIT_USER_REVIEW_TOKEN || '' }}
+          push-token: ${{ secrets.ORBIT_PUSH_TOKEN || secrets.PRBOT_PUSH_TOKEN }}
           # bot-login: my-app[bot]   # set this when github-token is a GitHub App token
-          llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
-          llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}
-          anthropic-api-key: ${{ secrets.PRBOT_ANTHROPIC_API_KEY }}
+          setup-python: ${{ runner.environment != 'self-hosted' }}
+          llm-base-url: ${{ secrets.ORBIT_LLM_BASE_URL || secrets.PRBOT_LLM_BASE_URL }}
+          llm-api-key: ${{ secrets.ORBIT_LLM_API_KEY || secrets.PRBOT_LLM_API_KEY }}
+          anthropic-api-key: ${{ secrets.ORBIT_ANTHROPIC_API_KEY || secrets.PRBOT_ANTHROPIC_API_KEY }}

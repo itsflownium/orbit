@@ -8,15 +8,15 @@ on:
     types: [created]
   workflow_call:
     secrets:
-      PRBOT_USER_REVIEW_TOKEN:
+      ORBIT_USER_REVIEW_TOKEN:
         required: false
-      PRBOT_PUSH_TOKEN:
+      ORBIT_PUSH_TOKEN:
         required: false
-      PRBOT_APP_PRIVATE_KEY:
+      ORBIT_APP_PRIVATE_KEY:
         required: false
-      PRBOT_LLM_BASE_URL:
+      ORBIT_LLM_BASE_URL:
         required: false
-      PRBOT_LLM_API_KEY:
+      ORBIT_LLM_API_KEY:
         required: false
   workflow_dispatch:
     inputs:
@@ -53,7 +53,11 @@ jobs:
       group: prbot-review-writes
       queue: max
     # CI completion still refreshes GitHub status when the Hermes runner is offline.
-    runs-on: ${{ ((github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml') && vars.PRBOT_REVIEW_RUNNER) || 'ubuntu-latest' }}
+    runs-on: >-
+      ${{ ((github.event_name != 'workflow_run' ||
+        github.event.workflow_run.path == '.github/workflows/prereview-analyze.yml' ||
+        (vars.ORBIT_REVIEW_IDENTITY || vars.PRBOT_REVIEW_IDENTITY) == 'user') &&
+        (vars.ORBIT_REVIEW_RUNNER || vars.PRBOT_REVIEW_RUNNER)) || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Mask local runner paths
@@ -61,37 +65,19 @@ jobs:
         shell: bash
         run: |
           if [ -n "${HOME:-}" ]; then printf '::add-mask::%s\n' "$HOME"; fi
-          if [ -n "${PRBOT_LLM_API_KEY:-}" ]; then printf '::add-mask::%s\n' "$PRBOT_LLM_API_KEY"; fi
+          model_key="${ORBIT_LLM_API_KEY:-${PRBOT_LLM_API_KEY:-}}"
+          if [ -n "$model_key" ]; then printf '::add-mask::%s\n' "$model_key"; fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Validate review identity
-        shell: bash
-        env:
-          REVIEW_IDENTITY: ${{ vars.PRBOT_REVIEW_IDENTITY }}
-          USER_REVIEW_TOKEN: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN || '' }}
-        run: |
-          case "$REVIEW_IDENTITY" in
-            ''|bot) ;;
-            user)
-              if [ -z "$USER_REVIEW_TOKEN" ]; then
-                echo '::error::User review mode requires the PRBOT_USER_REVIEW_TOKEN secret.'
-                exit 1
-              fi
-              ;;
-            *)
-              echo '::error::PRBOT_REVIEW_IDENTITY must be bot or user.'
-              exit 1
-              ;;
-          esac
       - name: Create Orbit installation token
-        if: vars.PRBOT_REVIEW_IDENTITY != 'user' && vars.PRBOT_APP_ID != ''
+        if: (vars.ORBIT_REVIEW_IDENTITY || vars.PRBOT_REVIEW_IDENTITY) != 'user' && (vars.ORBIT_APP_ID || vars.PRBOT_APP_ID) != ''
         id: orbit-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
-          app-id: ${{ vars.PRBOT_APP_ID }}
-          private-key: ${{ secrets.PRBOT_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.ORBIT_APP_ID || vars.PRBOT_APP_ID }}
+          private-key: ${{ secrets.ORBIT_APP_PRIVATE_KEY || secrets.PRBOT_APP_PRIVATE_KEY }}
           permission-actions: read
           permission-checks: read
           permission-contents: read
@@ -100,10 +86,11 @@ jobs:
           permission-statuses: write
       - uses: ./
         with:
-          github-token: ${{ (vars.PRBOT_REVIEW_IDENTITY == 'user' && secrets.PRBOT_USER_REVIEW_TOKEN) || steps.orbit-token.outputs.token || github.token }}
-          checks-token: ${{ vars.PRBOT_REVIEW_IDENTITY == 'user' && github.token || '' }}
-          push-token: ${{ secrets.PRBOT_PUSH_TOKEN }}
+          github-token: ${{ steps.orbit-token.outputs.token || github.token }}
+          review-identity: ${{ vars.ORBIT_REVIEW_IDENTITY || vars.PRBOT_REVIEW_IDENTITY }}
+          user-review-token: ${{ (vars.ORBIT_REVIEW_IDENTITY || vars.PRBOT_REVIEW_IDENTITY) == 'user' && (secrets.ORBIT_USER_REVIEW_TOKEN || secrets.PRBOT_USER_REVIEW_TOKEN) || '' }}
+          push-token: ${{ secrets.ORBIT_PUSH_TOKEN || secrets.PRBOT_PUSH_TOKEN }}
           bot-login: ${{ steps.orbit-token.outputs.app-slug && format('{0}[bot]', steps.orbit-token.outputs.app-slug) || '' }}
           setup-python: ${{ runner.environment != 'self-hosted' }}
-          llm-base-url: ${{ secrets.PRBOT_LLM_BASE_URL }}
-          llm-api-key: ${{ secrets.PRBOT_LLM_API_KEY }}
+          llm-base-url: ${{ secrets.ORBIT_LLM_BASE_URL || secrets.PRBOT_LLM_BASE_URL }}
+          llm-api-key: ${{ secrets.ORBIT_LLM_API_KEY || secrets.PRBOT_LLM_API_KEY }}
