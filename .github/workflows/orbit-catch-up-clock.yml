@@ -1,0 +1,73 @@
+name: Orbit catch-up clock
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: orbit-catch-up-clock
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    if: github.ref_name == github.event.repository.default_branch && vars.ORBIT_CATCH_UP_CLOCK == 'enabled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment:
+      name: orbit-catch-up-clock
+      deployment: false
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Queue the next tick and catch up when needed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_api="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          elapsed=$(gh api "$run_api" --jq '(now - (.created_at | fromdateiso8601)) | floor')
+          if (( elapsed < 50 )); then
+            echo "::error::Set a wait timer of at least one minute on the orbit-catch-up-clock environment."
+            exit 1
+          fi
+          echo "GitHub's environment timer released this run after ${elapsed}s."
+
+          workflows="repos/$GITHUB_REPOSITORY/actions/workflows"
+          dispatch() {
+            local workflow=$1
+            local attempt
+            for attempt in 1 2 3; do
+              if gh api --method POST "$workflows/$workflow/dispatches" \
+                  -H "X-GitHub-Api-Version: 2026-03-10" -f "ref=$GITHUB_REF_NAME"; then
+                return 0
+              fi
+              if (( attempt < 3 )); then sleep "$((attempt * 2))"; fi
+            done
+            return 1
+          }
+
+          # Keep the clock running even if this tick's review dispatch fails.
+          dispatch orbit-catch-up-clock.yml
+          echo "Queued the next clock run."
+
+          open_prs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+            -f state=open -F per_page=1 --jq 'length')
+          if (( open_prs == 0 )); then
+            echo "No open pull requests."
+            exit 0
+          fi
+
+          catch_up_covered=$(gh api --method GET "$workflows/prereview-catch-up.yml/runs" \
+            -F per_page=10 --jq 'any(.workflow_runs[];
+              .status != "completed" or
+              (.event == "schedule" and .conclusion == "success" and
+               ((.created_at | fromdateiso8601) > now - 900)))')
+          if [[ "$catch_up_covered" == true ]]; then
+            echo "A catch-up is active or a recent native run succeeded."
+            exit 0
+          fi
+
+          dispatch prereview-catch-up.yml
+          echo "Dispatched Orbit catch-up."

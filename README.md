@@ -209,6 +209,13 @@ model reviews and lists PRs still waiting for lint in the Actions job summary. I
 or stale, rerun the analysis for that PR. Set `ORBIT_SWEEP_LIMIT` in the review workflow to change the
 batch size.
 
+When GitHub's native schedule fails to deliver runs, the optional `Orbit catch-up clock` uses
+GitHub Actions' environment wait timer to start the same catch-up. On a public repository with
+these workflows installed, create an Actions environment named `orbit-catch-up-clock` with a
+10-minute wait timer. Set the repository variable `ORBIT_CATCH_UP_CLOCK` to `enabled`, then run
+`Orbit catch-up clock` once on the default branch. Each tick queues its successor and checks
+for open PRs before dispatching. Remove the variable and cancel the waiting clock run to stop it.
+
 ## Commands (comment on the PR)
 
 Start the comment with a `/bot` command. Maintainers can also recheck a single PR from the
