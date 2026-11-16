@@ -110,7 +110,7 @@ def _local_analyzer(gh: GitHub, workspace: str | None, enabled: bool):
 
 def cmd_review(args, gh: GitHub) -> int:
     res = review_pr(gh, args.repo, args.number, workspace=args.workspace, force=args.force,
-                    include_drafts=args.force or args.fresh_model, force_fix=args.fix, fresh_model=args.fresh_model,
+                    include_drafts=args.force and args.fresh_model, force_fix=args.fix, fresh_model=args.fresh_model,
                     analyze_fn=_local_analyzer(gh, args.workspace, not args.no_lint))
     _print_result(res, verbose=args.dry_run or args.verbose)
     return 1 if res.get("error") else 0
